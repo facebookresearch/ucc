@@ -110,3 +110,5 @@ $ mpirun -np 2 --mca scoll_ucc_enable 1 --mca scoll_ucc_priority 100 ./my_opensh
 * CUDA
 * NCCL
 * RCCL
+
+# This is an experimental branch, use with caution
