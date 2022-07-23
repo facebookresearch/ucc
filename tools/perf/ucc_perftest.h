@@ -17,8 +17,7 @@ extern "C" {
         _status = (_call);                                                     \
         if (UCC_OK != _status) {                                               \
             std::cerr << "UCC perftest error: " << ucc_status_string(_status)  \
-                      << " in " << STR(_call) <<  __FILE__ << ":"              \
-                      << __LINE__<< "\n";                                      \
+                      << " in " << STR(_call) << "\n";                         \
             goto _label;                                                       \
         }                                                                      \
     } while (0)

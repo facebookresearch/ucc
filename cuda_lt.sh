@@ -1,5 +1,4 @@
 #!/bin/bash
-set -e
 
 function replace_extension {
     __filename=$1

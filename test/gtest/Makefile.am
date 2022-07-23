@@ -61,8 +61,7 @@ gtest_LDFLAGS = $(GTEST_LDFLAGS) -pthread -no-install -Wl,-dynamic-list-data \
 gtest_CFLAGS   = $(BASE_CFLAGS) $(AM_CPPFLAGS)
 gtest_CXXFLAGS = -std=gnu++11 \
 	$(BASE_CXXFLAGS) $(GTEST_CXXFLAGS) \
-	-DGTEST_UCM_HOOK_LIB_DIR="\"${abs_builddir}/ucm/test_dlopen/.libs\"" \
-	-DGTEST_UCC_TOP_SRCDIR="\"${UCC_TOP_SRCDIR}\""
+	-DGTEST_UCM_HOOK_LIB_DIR="\"${abs_builddir}/ucm/test_dlopen/.libs\""
 
 gtest_SOURCES =                     \
 	common/gtest-all.cc             \
@@ -87,7 +86,6 @@ gtest_SOURCES =                     \
 	coll/test_alltoallv.cc          \
 	coll/test_allgather.cc          \
 	coll/test_allgatherv.cc         \
-	coll/test_gather.cc         	\
 	coll/test_bcast.cc              \
 	coll/test_reduce.cc             \
 	coll/test_allreduce.cc          \
@@ -97,11 +95,9 @@ gtest_SOURCES =                     \
 	utils/test_ep_map.cc            \
 	utils/test_lock_free_queue.cc   \
 	utils/test_math.cc              \
-	utils/test_cfg_file.cc          \
 	coll_score/test_score.cc        \
 	coll_score/test_score_str.cc    \
-	coll_score/test_score_update.cc \
-	active_set/test_active_set.cc
+	coll_score/test_score_update.cc
 
 if HAVE_CUDA
 gtest_SOURCES += \

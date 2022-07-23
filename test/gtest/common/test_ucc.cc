@@ -280,7 +280,6 @@ UccJob::UccJob(int _n_procs, ucc_job_ctx_mode_t _ctx_mode, ucc_job_env_t vars) :
     /* NCCL TL is disabled since it currently can not support non-blocking
        team creation. */
     vars.push_back({"UCC_TL_NCCL_TUNE", "0"});
-    vars.push_back({"UCC_TL_RCCL_TUNE", "0"});
     /* CUDA TL is disabled since cuda context is not initialized in threads. */
     vars.push_back({"UCC_TL_CUDA_TUNE", "0"});
     /* GDR is temporarily disabled due to known issue that may result
@@ -572,9 +571,6 @@ UccReq::UccReq(UccTeam_h _team, UccCollCtxVec ctxs) :
 
     status = UCC_OK;
     for (auto i = 0; i < team->procs.size(); i++) {
-        if (!ctxs[i]) {
-            continue;
-        }
         if (UCC_OK !=(st = ucc_collective_init(ctxs[i]->args, &req,
                                                team->procs[i].team))) {
             err_st.push_back(st);
@@ -609,6 +605,7 @@ void UccReq::start()
 {
     ucc_status_t st;
 
+    ASSERT_EQ(team->procs.size(), reqs.size());
     for (auto r : reqs) {
         st = ucc_collective_post(r);
         ASSERT_EQ(UCC_OK, st);

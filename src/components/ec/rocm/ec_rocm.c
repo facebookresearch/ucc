@@ -473,6 +473,7 @@ static ucc_status_t ucc_ec_rocm_finalize()
     ucc_mpool_cleanup(&ucc_ec_rocm.strm_reqs, 1);
     ucc_mpool_cleanup(&ucc_ec_rocm.executors, 1);
     ucc_free(ucc_ec_rocm.exec_streams);
+    //ucc_spinlock_destroy(&ucc_ec_rocm.init_spinlock);
     return UCC_OK;
 }
 

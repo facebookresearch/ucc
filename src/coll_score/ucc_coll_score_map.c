@@ -120,8 +120,7 @@ ucc_status_t ucc_coll_init(ucc_score_map_t      *map,
     while (&fb->list_elem != &r->fallback &&
            (status == UCC_ERR_NOT_SUPPORTED ||
             status == UCC_ERR_NOT_IMPLEMENTED)) {
-        ucc_debug("coll %s is not supported for %s, fallback %s",
-                  ucc_coll_type_str(bargs->args.coll_type),
+        ucc_debug("coll is not supported for %s, fallback %s",
                   team->context->lib->log_component.name,
                   fb->team->context->lib->log_component.name);
         team   = fb->team;

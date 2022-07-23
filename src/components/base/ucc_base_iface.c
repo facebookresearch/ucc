@@ -58,6 +58,5 @@ ucc_status_t ucc_base_config_read(const char *full_prefix,
     } else {
         *config = cfg;
     }
-
     return status;
 }

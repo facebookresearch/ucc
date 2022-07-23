@@ -361,11 +361,7 @@ static ucc_status_t ucc_create_tl_contexts(ucc_context_t *ctx,
     ucc_base_context_t *b_ctx;
     int                 i, num_tls;
     ucc_status_t        status;
-    ucc_base_lib_attr_t attr;
-    int                 ctx_service_team;
 
-    ctx_service_team = ctx_config->internal_oob &&
-        b_params.params.mask & UCC_CONTEXT_PARAM_FIELD_OOB;
     num_tls = ctx_config->n_tl_cfg;
     ctx->tl_ctx = (ucc_tl_context_t **)ucc_malloc(
         sizeof(ucc_tl_context_t *) * num_tls, "tl_ctx_array");
@@ -377,17 +373,6 @@ static ucc_status_t ucc_create_tl_contexts(ucc_context_t *ctx,
     ctx->n_tl_ctx = 0;
     for (i = 0; i < num_tls; i++) {
         tl_lib = ctx_config->tl_cfgs[i]->tl_lib;
-        status = tl_lib->iface->lib.get_attr(&tl_lib->super, &attr);
-        if (UCC_OK != status) {
-            ucc_error("failed to query tl lib %s attr", tl_lib->iface->super.name);
-            return status;
-        }
-        if ((attr.flags & UCC_BASE_LIB_FLAG_CTX_SERVICE_TEAM_REQUIRED) &&
-            (!ctx_service_team)) {
-            ucc_debug("can not create tl/%s context because context service team "
-                      "is not available for it", tl_lib->iface->super.name);
-            continue;
-        }
         status = tl_lib->iface->context.create(
             &b_params, &ctx_config->tl_cfgs[i]->super.super, &b_ctx);
         if (UCC_OK != status) {
@@ -671,8 +656,7 @@ ucc_status_t ucc_context_create(ucc_lib_h lib,
     }
     ctx->id.pi      = ucc_local_proc;
     ctx->id.seq_num = ucc_atomic_fadd32(&ucc_context_seq_num, 1);
-    if (params->mask & UCC_CONTEXT_PARAM_FIELD_OOB &&
-        params->oob.n_oob_eps > 1) {
+    if (params->mask & UCC_CONTEXT_PARAM_FIELD_OOB) {
         do {
             /* UCC context create is blocking fn, so we can wait here for the
                completion of addr exchange */
@@ -696,8 +680,7 @@ ucc_status_t ucc_context_create(ucc_lib_h lib,
         ucc_assert(ctx->addr_storage.rank == params->oob.oob_ep);
     }
     if (config->internal_oob) {
-        if (params->mask & UCC_CONTEXT_PARAM_FIELD_OOB &&
-            params->oob.n_oob_eps > 1) {
+        if (params->mask & UCC_CONTEXT_PARAM_FIELD_OOB) {
             ucc_base_team_params_t t_params;
             ucc_base_team_t *      b_team;
             status = ucc_tl_context_get(ctx, "ucp", &ctx->service_ctx);

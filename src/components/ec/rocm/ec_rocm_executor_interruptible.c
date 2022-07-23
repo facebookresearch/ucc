@@ -75,9 +75,9 @@ ucc_rocm_executor_interruptible_task_post(ucc_ee_executor_t *executor,
     switch (task_args->task_type) {
     case UCC_EE_EXECUTOR_TASK_TYPE_COPY:
         status = ROCM_FUNC(hipMemcpyAsync(task_args->bufs[0],
-                                          task_args->bufs[1],
-                                          task_args->count, hipMemcpyDefault,
-                                          stream));
+                                           task_args->bufs[1],
+                                           task_args->count, hipMemcpyDefault,
+                                           stream));
         if (ucc_unlikely(status != UCC_OK)) {
             ec_error(&ucc_ec_rocm.super, "failed to start memcpy op");
             goto free_task;
@@ -86,6 +86,7 @@ ucc_rocm_executor_interruptible_task_post(ucc_ee_executor_t *executor,
         break;
     case UCC_EE_EXECUTOR_TASK_TYPE_REDUCE:
         /* temp workaround to avoid code duplication*/
+        printf("executor operation is supported task_type %d", task_args->task_type);
         status = ucc_mc_reduce(task_args->bufs[1], task_args->bufs[2],
                                task_args->bufs[0], task_args->count,
                                task_args->dt, task_args->op,

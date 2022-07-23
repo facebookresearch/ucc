@@ -7,33 +7,36 @@
 #include "test_mpi.h"
 #include "mpi_util.h"
 
-TestAllreduce::TestAllreduce(ucc_test_team_t &_team, TestCaseParams &params) :
-    TestCase(_team, UCC_COLL_TYPE_ALLREDUCE, params)
+TestAllreduce::TestAllreduce(size_t _msgsize, ucc_test_mpi_inplace_t _inplace,
+                             ucc_datatype_t _dt, ucc_reduction_op_t _op,
+                             ucc_memory_type_t _mt, ucc_test_team_t &_team,
+                             size_t _max_size) :
+    TestCase(_team, UCC_COLL_TYPE_ALLREDUCE, _mt, _msgsize, _inplace, _max_size)
 {
-    size_t dt_size = ucc_dt_size(params.dt);
-    size_t count   = msgsize/dt_size;
+    size_t dt_size = ucc_dt_size(_dt);
+    size_t count   = _msgsize/dt_size;
     int    rank;
 
     MPI_Comm_rank(team.comm, &rank);
-    op = params.op;
-    dt = params.dt;
+    op = _op;
+    dt = _dt;
 
-    if (skip_reduce(test_max_size < msgsize, TEST_SKIP_MEM_LIMIT,
+    if (skip_reduce(test_max_size < _msgsize, TEST_SKIP_MEM_LIMIT,
                     team.comm)) {
         return;
     }
 
-    UCC_CHECK(ucc_mc_alloc(&rbuf_mc_header, msgsize, mem_type));
+    UCC_CHECK(ucc_mc_alloc(&rbuf_mc_header, _msgsize, _mt));
     rbuf      = rbuf_mc_header->addr;
-    check_buf = ucc_malloc(msgsize, "check buf");
+    check_buf = ucc_malloc(_msgsize, "check buf");
     UCC_MALLOC_CHECK(check_buf);
     if (TEST_NO_INPLACE == inplace) {
-        UCC_CHECK(ucc_mc_alloc(&sbuf_mc_header, msgsize, mem_type));
+        UCC_CHECK(ucc_mc_alloc(&sbuf_mc_header, _msgsize, _mt));
         sbuf = sbuf_mc_header->addr;
         args.src.info.buffer      = sbuf;
         args.src.info.count       = count;
-        args.src.info.datatype    = dt;
-        args.src.info.mem_type    = mem_type;
+        args.src.info.datatype    = _dt;
+        args.src.info.mem_type    = _mt;
     } else {
         args.mask                 = UCC_COLL_ARGS_FIELD_FLAGS;
         args.flags                = UCC_COLL_ARGS_FLAG_IN_PLACE;
@@ -43,11 +46,11 @@ TestAllreduce::TestAllreduce(ucc_test_team_t &_team, TestCaseParams &params) :
         args.src.info.mem_type    = UCC_MEMORY_TYPE_UNKNOWN;
     }
 
-    args.op                   = op;
+    args.op                   = _op;
     args.dst.info.buffer      = rbuf;
     args.dst.info.count       = count;
-    args.dst.info.datatype    = dt;
-    args.dst.info.mem_type    = mem_type;
+    args.dst.info.datatype    = _dt;
+    args.dst.info.mem_type    = _mt;
     UCC_CHECK(set_input());
     UCC_CHECK_SKIP(ucc_collective_init(&args, &req, team.team), test_skip);
 }

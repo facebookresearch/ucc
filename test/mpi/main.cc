@@ -16,10 +16,8 @@ static std::vector<ucc_coll_type_t> colls = {
     UCC_COLL_TYPE_SCATTER,        UCC_COLL_TYPE_SCATTERV};
 static std::vector<ucc_coll_type_t> onesided_colls = {UCC_COLL_TYPE_ALLTOALL};
 static std::vector<ucc_memory_type_t> mtypes = {UCC_MEMORY_TYPE_HOST};
-static std::vector<ucc_datatype_t>    dtypes         = {
-    UCC_DT_INT16,   UCC_DT_INT32,   UCC_DT_INT64,
-    UCC_DT_UINT16,  UCC_DT_UINT32,  UCC_DT_UINT64,
-    UCC_DT_FLOAT32, UCC_DT_FLOAT64, UCC_DT_FLOAT64_COMPLEX};
+static std::vector<ucc_datatype_t> dtypes = {UCC_DT_INT32, UCC_DT_INT64,
+                                             UCC_DT_FLOAT32, UCC_DT_FLOAT64};
 static std::vector<ucc_reduction_op_t>     ops    = {UCC_OP_SUM, UCC_OP_MAX,
                                               UCC_OP_AVG};
 static std::vector<ucc_test_mpi_team_t> teams = {TEAM_WORLD, TEAM_REVERSE,
@@ -30,7 +28,6 @@ static std::vector<ucc_test_vsize_flag_t> displs_vsize = {TEST_FLAG_VSIZE_32BIT,
                                                           TEST_FLAG_VSIZE_64BIT};
 static size_t msgrange[3] = {8, (1ULL << 21), 8};
 static std::vector<ucc_test_mpi_inplace_t> inplace = {TEST_NO_INPLACE};
-static std::vector<bool> triggered = {false};
 static ucc_test_mpi_root_t root_type = ROOT_RANDOM;
 static int root_value = 10;
 static ucc_thread_mode_t                   thread_mode  = UCC_THREAD_SINGLE;
@@ -40,7 +37,7 @@ static int                                 num_tests    = 1;
 static bool                                has_onesided = true;
 static bool                                verbose      = false;
 #if defined(HAVE_CUDA) || defined(HAVE_HIP)
-extern test_set_gpu_device_t test_gpu_set_device;
+static test_set_gpu_device_t test_gpu_set_device = TEST_SET_DEV_NONE;
 #endif
 
 static std::vector<std::string> str_split(const char *value, const char *delimiter)
@@ -67,7 +64,7 @@ void PrintHelp()
             "reduce, reduce_scatter, reduce_scatterv, gather, gatherv, scatter, scatterv\n\n"
        "-t, --teams            <t1,t2,..>\n\tlist of teams: world,half,reverse,odd_even\n\n"
        "-M, --mtypes           <m1,m2,..>\n\tlist of mtypes: host,cuda,rocm\n\n"
-       "-d, --dtypes           <d1,d2,..>\n\tlist of dtypes: (u)int8(16,32,64),float32(64,128),float32(64,128)_complex\n\n"
+       "-d, --dtypes           <d1,d2,..>\n\tlist of dtypes: (u)int8(16,32,64),float32(64)\n\n"
        "-o, --ops              <o1,o2,..>\n\tlist of ops:sum,prod,max,min,land,lor,lxor,band,bor,bxor\n\n"
        "-I, --inplace          <value>\n\t0 - no inplace, 1 - inplace, 2 - both\n\n"
        "-m, --msgsize          <min:max[:power]>\n\tmesage sizes range\n\n"
@@ -82,7 +79,6 @@ void PrintHelp()
        "-i, --iter             <value>\n\tnumber of iterations each test cases is executed\n\n"
        "-T, --thread-multiple\n\tenable multi-threaded testing\n\n"
        "-v, --verbose\n\tlog all test cases\n\n"
-       "--triggered            <value>\n\t0 - use post, 1 - use triggered post, 2 - both\n\n"
        "-h, --help\n\tShow help\n";
 }
 
@@ -124,7 +120,7 @@ static ucc_coll_type_t coll_str_to_type(std::string coll)
     } else if (coll == "bcast") {
         return UCC_COLL_TYPE_BCAST;
     } else if (coll == "reduce") {
-        return UCC_COLL_TYPE_REDUCE;
+            return UCC_COLL_TYPE_REDUCE;
     } else if (coll == "alltoall") {
         return UCC_COLL_TYPE_ALLTOALL;
     } else if (coll == "alltoallv") {
@@ -184,8 +180,6 @@ static ucc_datatype_t dtype_str_to_type(std::string dtype)
         return UCC_DT_FLOAT32;
     } else if (dtype == "float64") {
         return UCC_DT_FLOAT64;
-    } else if (dtype == "float128") {
-        return UCC_DT_FLOAT128;
     } else if (dtype == "bfloat16") {
         return UCC_DT_BFLOAT16;
     } else if (dtype == "float16") {
@@ -194,12 +188,6 @@ static ucc_datatype_t dtype_str_to_type(std::string dtype)
         return UCC_DT_INT128;
     } else if (dtype == "uint128") {
         return UCC_DT_UINT128;
-    } else if (dtype == "float32_complex") {
-        return UCC_DT_FLOAT32_COMPLEX;
-    } else if (dtype == "float64_complex") {
-        return UCC_DT_FLOAT64_COMPLEX;
-    } else if (dtype == "float128_complex") {
-        return UCC_DT_FLOAT128_COMPLEX;
     }
     throw std::string("incorrect  dtype: ") + dtype;
 }
@@ -283,25 +271,6 @@ static void process_inplace(const char *arg)
     throw std::string("incorrect inplace: ") + arg;
 }
 
-static void process_triggered(const char *arg)
-{
-    int value = std::stoi(arg);
-    switch(value) {
-    case 0:
-        triggered = {false};
-        return;
-    case 1:
-        triggered = {true};
-        return;
-    case 2:
-        triggered = {false, true};
-        return;
-    default:
-        break;
-    }
-    throw std::string("incorrect triggered: ") + arg;
-}
-
 static void process_root(const char *arg)
 {
     auto tokens = str_split(arg, ":");
@@ -365,7 +334,7 @@ void PrintInfo()
 
 void ProcessArgs(int argc, char** argv)
 {
-    const char *const short_opts  = "c:t:m:d:o:M:I:N:r:s:C:D:i:Z:GThvSO:";
+    const char *const short_opts  = "c:t:m:d:o:M:I:N:r:s:C:D:i:Z:ThvSO:";
     const option      long_opts[] = {
                                 {"colls", required_argument, nullptr, 'c'},
                                 {"teams", required_argument, nullptr, 't'},
@@ -382,8 +351,6 @@ void ProcessArgs(int argc, char** argv)
                                 {"iter", required_argument, nullptr, 'i'},
                                 {"thread-multiple", no_argument, nullptr, 'T'},
                                 {"num_tests", required_argument, nullptr, 'N'},
-                                {"triggered", required_argument, nullptr, 'G'},
-                                {"verbose", no_argument, nullptr, 'v'},
 #if defined(HAVE_CUDA) || defined(HAVE_HIP)
                                 {"set_device", required_argument, nullptr, 'S'},
 #endif
@@ -421,9 +388,6 @@ void ProcessArgs(int argc, char** argv)
             break;
         case 'I':
             process_inplace(optarg);
-            break;
-        case 'G':
-            process_triggered(optarg);
             break;
         case 'r':
             process_root(optarg);
@@ -541,22 +505,16 @@ int main(int argc, char *argv[])
     PrintInfo();
 
     for (auto &inpl : inplace) {
-        for (auto trig: triggered) {
-            test->set_triggered(trig);
-            test->set_inplace(inpl);
-            test->run_all();
-        }
+        test->set_inplace(inpl);
+        test->run_all();
     }
-
     if (has_onesided) {
         test->set_colls(onesided_colls);
         for (auto &inpl : inplace) {
-            test->set_triggered(false);
             test->set_inplace(inpl);
             test->run_all(true);
         }
     }
-
     std::cout << std::flush;
     MPI_Iallreduce(MPI_IN_PLACE, test->results.data(), test->results.size(),
                    MPI_INT, MPI_MIN, MPI_COMM_WORLD, &req);

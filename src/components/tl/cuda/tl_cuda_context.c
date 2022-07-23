@@ -1,5 +1,6 @@
 /**
  * Copyright (C) Mellanox Technologies Ltd. 2021.  ALL RIGHTS RESERVED.
+ * Copyright (c) Meta Platforms, Inc. and affiliates. 2022.
  *
  * See file LICENSE for terms.
  */
@@ -32,6 +33,9 @@ UCC_CLASS_INIT_FUNC(ucc_tl_cuda_context_t,
 
     UCC_CLASS_CALL_SUPER_INIT(ucc_tl_context_t, &tl_cuda_config->super,
                               params->context);
+    if (params->params.oob.n_oob_eps == 1) {
+        return UCC_ERR_NOT_SUPPORTED;
+    }
     memcpy(&self->cfg, tl_cuda_config, sizeof(*tl_cuda_config));
 
     cuda_st = cudaGetDeviceCount(&num_devices);

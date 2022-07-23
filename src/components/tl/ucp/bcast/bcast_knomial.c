@@ -16,7 +16,7 @@ void ucc_tl_ucp_bcast_knomial_progress(ucc_coll_task_t *coll_task)
     ucc_tl_ucp_task_t *task      = ucc_derived_of(coll_task, ucc_tl_ucp_task_t);
     ucc_tl_ucp_team_t *team      = TASK_TEAM(task);
     ucc_rank_t         rank      = task->subset.myrank;
-    ucc_rank_t         size      = (ucc_rank_t)task->subset.map.ep_num;
+    ucc_rank_t         size      = (ucc_rank_t) task->subset.map.ep_num;
     ucc_rank_t         root      = (uint32_t)TASK_ARGS(task).root;
     uint32_t           radix     = task->bcast_kn.radix;
     ucc_rank_t         vrank     = (rank - root + size) % size;
@@ -74,7 +74,7 @@ ucc_status_t ucc_tl_ucp_bcast_knomial_start(ucc_coll_task_t *coll_task)
 {
     ucc_tl_ucp_task_t *task = ucc_derived_of(coll_task, ucc_tl_ucp_task_t);
     ucc_tl_ucp_team_t *team = TASK_TEAM(task);
-    ucc_rank_t         size = (ucc_rank_t)task->subset.map.ep_num;
+    ucc_rank_t         size = (ucc_rank_t) task->subset.map.ep_num;
 
     UCC_TL_UCP_PROFILE_REQUEST_EVENT(coll_task, "ucp_bcast_kn_start", 0);
     ucc_tl_ucp_task_reset(task, UCC_INPROGRESS);

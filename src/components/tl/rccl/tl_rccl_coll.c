@@ -32,13 +32,6 @@ ncclDataType_t ucc_to_rccl_dtype[] = {
     [UCC_DT_PREDEFINED_ID(UCC_DT_FLOAT16)]  = (ncclDataType_t)ncclFloat16,
     [UCC_DT_PREDEFINED_ID(UCC_DT_FLOAT32)]  = (ncclDataType_t)ncclFloat32,
     [UCC_DT_PREDEFINED_ID(UCC_DT_FLOAT64)]  = (ncclDataType_t)ncclFloat64,
-    [UCC_DT_PREDEFINED_ID(UCC_DT_FLOAT128)] = (ncclDataType_t)ncclDataTypeUnsupported,
-    [UCC_DT_PREDEFINED_ID(UCC_DT_FLOAT32_COMPLEX)] =
-        (ncclDataType_t)ncclDataTypeUnsupported,
-    [UCC_DT_PREDEFINED_ID(UCC_DT_FLOAT64_COMPLEX)] =
-        (ncclDataType_t)ncclDataTypeUnsupported,
-    [UCC_DT_PREDEFINED_ID(UCC_DT_FLOAT128_COMPLEX)] =
-        (ncclDataType_t)ncclDataTypeUnsupported,
 #if NCCL_VERSION_CODE >= NCCL_VERSION(2,10,3)
     [UCC_DT_PREDEFINED_ID(UCC_DT_BFLOAT16)] = (ncclDataType_t)ncclBfloat16,
 #else
@@ -112,9 +105,6 @@ ucc_tl_rccl_task_t * ucc_tl_rccl_init_task(ucc_base_coll_args_t *coll_args,
 void ucc_tl_rccl_free_task(ucc_tl_rccl_task_t *task)
 {
     UCC_TL_RCCL_PROFILE_REQUEST_FREE(task);
-    if (task->completed) {
-        ucc_ec_destroy_event(task->completed, UCC_EE_ROCM_STREAM);
-    }
     ucc_mpool_put(task);
 }
 
@@ -153,6 +143,9 @@ ucc_status_t ucc_tl_rccl_coll_finalize(ucc_coll_task_t *coll_task)
     ucc_status_t       status = UCC_OK ;
 
     tl_info(UCC_TASK_LIB(task), "finalizing coll task %p", task);
+    if (task->completed) {
+        ucc_ec_destroy_event(task->completed, UCC_EE_ROCM_STREAM);
+    }
     ucc_tl_rccl_free_task(task);
     return status;
 }

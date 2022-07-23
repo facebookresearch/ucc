@@ -84,8 +84,6 @@ AS_IF([test "x$cuda_checked" != "xyes"],
                                            [])],
                              [],
                              [[#include <nvml.h>]])])
-        AC_CHECK_SIZEOF(cuFloatComplex,,[#include <cuComplex.h>])
-        AC_CHECK_SIZEOF(cuDoubleComplex,,[#include <cuComplex.h>])
 
          # Check for NVCC
          AC_ARG_VAR(NVCC, [NVCC compiler command])

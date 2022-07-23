@@ -65,8 +65,7 @@
     (UCC_COLL_IS_SRC_CONTIG(_args) && UCC_COLL_IS_DST_CONTIG(_args))
 
 #define UCC_COLL_ARGS_ACTIVE_SET(_args)             \
-    ((_args)->mask & UCC_COLL_ARGS_FIELD_ACTIVE_SET)
-
+     ((_args)->mask & UCC_COLL_ARGS_FIELD_ACTIVE_SET)
 
 static inline size_t
 ucc_coll_args_get_count(const ucc_coll_args_t *args, const ucc_count_t *counts,
@@ -222,34 +221,6 @@ void ucc_ep_map_destroy_nested(ucc_ep_map_t *out);
 
 void ucc_ep_map_destroy(ucc_ep_map_t *map);
 
-/* The two helper routines below are used to partition a buffer
-   consisiting of total_count elements into blocks.
-   This is used, e.g., in ReduceScatter or during fragmentation
-   process.
-   First total_count is devided into n_blocks. If the devision
-   has remainder then it is evenly distributed among first blocks.
-*/
-static inline size_t ucc_buffer_block_count(size_t     total_count,
-                                            ucc_rank_t n_blocks,
-                                            ucc_rank_t block)
-{
-    size_t block_count = total_count / n_blocks;
-    size_t left        = total_count % n_blocks;
-
-    return (block < left) ? block_count + 1 : block_count;
-}
-
-static inline size_t ucc_buffer_block_offset(size_t     total_count,
-                                             ucc_rank_t n_blocks,
-                                             ucc_rank_t block)
-{
-    size_t block_count = total_count / n_blocks;
-    size_t left        = total_count % n_blocks;
-    size_t offset      = block * block_count + left;
-
-    return (block < left) ? offset - (left - block) : offset;
-}
-
 /* Given the rank space A (e.g. core ucc team), a subset B (e.g. active set
    within the core team), the ep_map that maps ranks from the subset B to A,
    and the rank of a process within A.
@@ -260,7 +231,7 @@ static inline ucc_rank_t ucc_ep_map_local_rank(ucc_ep_map_t map,
     ucc_rank_t i, local_rank = UCC_RANK_INVALID;
     int64_t    vrank;
 
-    switch(map.type) {
+     switch(map.type) {
     case UCC_EP_MAP_FULL:
         local_rank = rank;
         break;
@@ -295,28 +266,32 @@ static inline ucc_ep_map_t ucc_active_set_to_ep_map(ucc_coll_args_t *args)
     return map;
 }
 
-static inline size_t ucc_buffer_block_count_aligned(size_t total_count,
-                                                    ucc_rank_t n_blocks,
-                                                    ucc_rank_t block,
-                                                    int alignment)
+/* The two helper routines below are used to partition a buffer
+   consisiting of total_count elements into blocks.
+   This is used, e.g., in ReduceScatter or during fragmentation
+   process.
+   First total_count is devided into n_blocks. If the devision
+   has remainder then it is evenly distributed among first blocks.
+*/
+static inline size_t ucc_buffer_block_count(size_t     total_count,
+                                            ucc_rank_t n_blocks,
+                                            ucc_rank_t block)
 {
-    size_t block_count = ucc_align_up_pow2(ucc_max(total_count / n_blocks, 1),
-                                           alignment);
-    size_t offset      = block_count * block;
+    size_t block_count = total_count / n_blocks;
+    size_t left        = total_count % n_blocks;
 
-    return (total_count < offset) ? 0: ucc_min(total_count - offset, block_count);
+    return (block < left) ? block_count + 1 : block_count;
 }
 
-static inline size_t ucc_buffer_block_offset_aligned(size_t total_count,
-                                                     ucc_rank_t n_blocks,
-                                                     ucc_rank_t block,
-                                                     int alignment)
+static inline size_t ucc_buffer_block_offset(size_t     total_count,
+                                             ucc_rank_t n_blocks,
+                                             ucc_rank_t block)
 {
-    size_t block_count = ucc_align_up_pow2(ucc_max(total_count / n_blocks, 1),
-                                           alignment);
-    size_t offset      = block_count * block;
+    size_t block_count = total_count / n_blocks;
+    size_t left        = total_count % n_blocks;
+    size_t offset      = block * block_count + left;
 
-    return ucc_min(offset, total_count);
+    return (block < left) ? offset - (left - block) : offset;
 }
 
 #endif

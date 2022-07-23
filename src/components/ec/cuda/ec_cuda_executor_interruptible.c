@@ -43,23 +43,13 @@ unlock:
     return UCC_OK;
 }
 
-
-ucc_status_t ucc_ec_cuda_copy_multi_kernel(const ucc_ee_executor_task_args_t *args,
-                                           cudaStream_t stream);
-
 ucc_status_t
 ucc_cuda_executor_interruptible_task_post(ucc_ee_executor_t *executor,
                                          const ucc_ee_executor_task_args_t *task_args,
                                          ucc_ee_executor_task_t **task)
 {
-    cudaStream_t stream = NULL;
     ucc_ec_cuda_executor_interruptible_task_t *ee_task;
     ucc_status_t status;
-
-    status = ucc_cuda_executor_interruptible_get_stream(&stream);
-    if (ucc_unlikely(status != UCC_OK)) {
-        return status;
-    }
 
     ee_task = ucc_mpool_get(&ucc_ec_cuda.executor_interruptible_tasks);
     if (ucc_unlikely(!ee_task)) {
@@ -79,18 +69,12 @@ ucc_cuda_executor_interruptible_task_post(ucc_ee_executor_t *executor,
         status = CUDA_FUNC(cudaMemcpyAsync(task_args->bufs[0],
                                            task_args->bufs[1],
                                            task_args->count, cudaMemcpyDefault,
-                                           stream));
+                                           ucc_ec_cuda.stream));
         if (ucc_unlikely(status != UCC_OK)) {
             ec_error(&ucc_ec_cuda.super, "failed to start memcpy op");
             goto free_task;
         }
-        break;
-    case UCC_EE_EXECUTOR_TASK_TYPE_COPY_MULTI:
-        status = ucc_ec_cuda_copy_multi_kernel(task_args, stream);
-        if (ucc_unlikely(status != UCC_OK)) {
-            ec_error(&ucc_ec_cuda.super, "failed to start copy multi op");
-            goto free_task;
-        }
+
         break;
     case UCC_EE_EXECUTOR_TASK_TYPE_REDUCE:
         /* temp workaround to avoid code duplication*/
@@ -130,13 +114,12 @@ ucc_cuda_executor_interruptible_task_post(ucc_ee_executor_t *executor,
         }
         break;
     default:
-        ec_error(&ucc_ec_cuda.super, "executor operation %d is not supported",
-                 task_args->task_type);
+        ec_error(&ucc_ec_cuda.super, "executor operation is not supported");
         status = UCC_ERR_INVALID_PARAM;
         goto free_task;
     }
 
-    status = ucc_ec_cuda_event_post(stream, ee_task->event);
+    status = ucc_ec_cuda_event_post(ucc_ec_cuda.stream, ee_task->event);
     if (ucc_unlikely(status != UCC_OK)) {
         goto free_task;
     }

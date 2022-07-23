@@ -17,14 +17,12 @@ alltoallv =                      \
 allgather =                      \
 	allgather/allgather.h        \
 	allgather/allgather.c        \
-	allgather/allgather_ring.c   \
-	allgather/allgather_linear.c
+	allgather/allgather_ring.c
 
-allgatherv =                       \
-	allgatherv/allgatherv.h        \
-	allgatherv/allgatherv.c        \
-	allgatherv/allgatherv_ring.c   \
-	allgatherv/allgatherv_linear.c
+allgatherv =                     \
+	allgatherv/allgatherv.h      \
+	allgatherv/allgatherv.c      \
+	allgatherv/allgatherv_ring.c
 
 reduce_scatter =                         \
 	reduce_scatter/reduce_scatter.h      \

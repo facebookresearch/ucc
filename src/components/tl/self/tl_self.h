@@ -14,7 +14,7 @@
 #include "utils/ucc_mpool.h"
 
 #ifndef UCC_TL_SELF_DEFAULT_SCORE
-#define UCC_TL_SELF_DEFAULT_SCORE 50
+#define UCC_TL_SELF_DEFAULT_SCORE 15
 #endif
 
 #ifdef HAVE_PROFILING_TL_SELF

@@ -1,5 +1,5 @@
 /**
- * Copyright (C) Mellanox Technologies Ltd. 2022.  ALL RIGHTS RESERVED.
+ * Copyright (C) Mellanox Technologies Ltd. 2021.  ALL RIGHTS RESERVED.
  * See file LICENSE for terms.
  */
 
@@ -122,14 +122,18 @@ class UccProcess {
 public:
     ucc_context_params_t ctx_params;
     static constexpr ucc_lib_params_t default_lib_params = {
-        .mask =
-            UCC_LIB_PARAM_FIELD_THREAD_MODE | UCC_LIB_PARAM_FIELD_COLL_TYPES,
+        .mask = UCC_LIB_PARAM_FIELD_THREAD_MODE |
+                UCC_LIB_PARAM_FIELD_COLL_TYPES,
         .thread_mode = UCC_THREAD_SINGLE,
-        .coll_types  = UCC_COLL_TYPE_BARRIER | UCC_COLL_TYPE_ALLTOALL |
-                      UCC_COLL_TYPE_ALLTOALLV | UCC_COLL_TYPE_ALLREDUCE |
-                      UCC_COLL_TYPE_ALLGATHER | UCC_COLL_TYPE_ALLGATHERV |
-                      UCC_COLL_TYPE_REDUCE | UCC_COLL_TYPE_GATHER |
-                      UCC_COLL_TYPE_BCAST};
+        .coll_types = UCC_COLL_TYPE_BARRIER |
+                      UCC_COLL_TYPE_ALLTOALL |
+                      UCC_COLL_TYPE_ALLTOALLV |
+                      UCC_COLL_TYPE_ALLREDUCE |
+                      UCC_COLL_TYPE_ALLGATHER |
+                      UCC_COLL_TYPE_ALLGATHERV |
+                      UCC_COLL_TYPE_REDUCE |
+                      UCC_COLL_TYPE_BCAST
+    };
     static constexpr ucc_context_params_t default_ctx_params = {
         .mask = UCC_CONTEXT_PARAM_FIELD_TYPE,
         .type = UCC_CONTEXT_EXCLUSIVE
@@ -256,13 +260,10 @@ public:
 
 void clear_buffer(void *_buf, size_t size, ucc_memory_type_t mt, uint8_t value);
 
-#define PREDEFINED_DTYPES                                                      \
-    ::testing::Values(                                                         \
-        UCC_DT_INT8, UCC_DT_INT16, UCC_DT_INT32, UCC_DT_INT64, UCC_DT_INT128,  \
-        UCC_DT_UINT8, UCC_DT_UINT16, UCC_DT_UINT32, UCC_DT_UINT64,             \
-        UCC_DT_UINT128, UCC_DT_FLOAT16, UCC_DT_FLOAT32, UCC_DT_FLOAT64,        \
-        UCC_DT_BFLOAT16, UCC_DT_FLOAT128, UCC_DT_FLOAT32_COMPLEX,              \
-        UCC_DT_FLOAT64_COMPLEX, UCC_DT_FLOAT128_COMPLEX)
+#define PREDEFINED_DTYPES \
+    ::testing::Values(UCC_DT_INT8, UCC_DT_INT16, UCC_DT_INT32, UCC_DT_INT64, UCC_DT_INT128,\
+                      UCC_DT_UINT8, UCC_DT_UINT16, UCC_DT_UINT32, UCC_DT_UINT64, UCC_DT_UINT128,\
+                      UCC_DT_FLOAT16, UCC_DT_FLOAT32, UCC_DT_FLOAT64, UCC_DT_BFLOAT16)
 
 #define UCC_TEST_N_MEM_SEGMENTS   3
 #define UCC_TEST_MEM_SEGMENT_SIZE (1 << 20)

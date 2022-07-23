@@ -33,20 +33,22 @@ static void fill_counts_and_displacements(int size, int count,
     displs[size - 1] = displs[size - 2] + counts[size - 2];
 }
 
-TestScatterv::TestScatterv(ucc_test_team_t &_team, TestCaseParams &params) :
-    TestCase(_team, UCC_COLL_TYPE_SCATTERV, params)
+TestScatterv::TestScatterv(size_t _msgsize, ucc_test_mpi_inplace_t _inplace,
+                           ucc_memory_type_t _mt, int _root,
+                           ucc_test_team_t &_team, size_t _max_size) :
+    TestCase(_team, UCC_COLL_TYPE_SCATTERV, _mt, _msgsize, _inplace, _max_size)
 {
     size_t dt_size = ucc_dt_size(TEST_DT);
-    size_t count   = msgsize / dt_size;
+    size_t count   = _msgsize / dt_size;
     int    rank, size;
 
-    root          = params.root;
+    root          = _root;
     counts        = NULL;
     displacements = NULL;
     MPI_Comm_rank(team.comm, &rank);
     MPI_Comm_size(team.comm, &size);
 
-    if (TEST_SKIP_NONE != skip_reduce(test_max_size < (msgsize * size),
+    if (TEST_SKIP_NONE != skip_reduce(test_max_size < (_msgsize*size),
                                       TEST_SKIP_MEM_LIMIT, team.comm)) {
         return;
     }
@@ -60,18 +62,18 @@ TestScatterv::TestScatterv(ucc_test_team_t &_team, TestCaseParams &params) :
     fill_counts_and_displacements(size, count, counts, displacements);
 
     if (rank == root) {
-        UCC_CHECK(ucc_mc_alloc(&sbuf_mc_header, count * size * dt_size, mem_type));
+        UCC_CHECK(ucc_mc_alloc(&sbuf_mc_header, count * size * dt_size, _mt));
         sbuf = sbuf_mc_header->addr;
         if (TEST_NO_INPLACE == inplace) {
             UCC_CHECK(ucc_mc_alloc(&rbuf_mc_header, counts[rank] * dt_size,
-                                   mem_type));
+                                   _mt));
             rbuf = rbuf_mc_header->addr;
         } else {
             rbuf_mc_header = NULL;
             rbuf = NULL;
         }
     } else {
-        UCC_CHECK(ucc_mc_alloc(&rbuf_mc_header, counts[rank] * dt_size, mem_type));
+        UCC_CHECK(ucc_mc_alloc(&rbuf_mc_header, counts[rank] * dt_size, _mt));
         rbuf = rbuf_mc_header->addr;
         sbuf_mc_header = NULL;
         sbuf = NULL;
@@ -91,18 +93,18 @@ TestScatterv::TestScatterv(ucc_test_team_t &_team, TestCaseParams &params) :
         args.src.info_v.counts        = (ucc_count_t*)counts;
         args.src.info_v.displacements = (ucc_aint_t*)displacements;
         args.src.info_v.datatype      = TEST_DT;
-        args.src.info_v.mem_type      = mem_type;
+        args.src.info_v.mem_type      = _mt;
         if (TEST_NO_INPLACE == inplace) {
             args.dst.info.buffer   = rbuf;
             args.dst.info.count    = counts[rank];
             args.dst.info.datatype = TEST_DT;
-            args.dst.info.mem_type = mem_type;
+            args.dst.info.mem_type = _mt;
         }
     } else {
         args.dst.info.buffer   = rbuf;
         args.dst.info.count    = counts[rank];
         args.dst.info.datatype = TEST_DT;
-        args.dst.info.mem_type = mem_type;
+        args.dst.info.mem_type = _mt;
     }
 
     UCC_CHECK(set_input());

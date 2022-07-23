@@ -1,5 +1,6 @@
 /**
  * Copyright (C) Mellanox Technologies Ltd. 2020-2021.  ALL RIGHTS RESERVED.
+ * Copyright (c) Meta Platforms, Inc. and affiliates. 2022.
  *
  * See file LICENSE for terms.
  */
@@ -31,6 +32,9 @@ UCC_CLASS_INIT_FUNC(ucc_tl_ucp_context_t,
 
     UCC_CLASS_CALL_SUPER_INIT(ucc_tl_context_t, &tl_ucp_config->super,
                               params->context);
+    if (params->params.oob.n_oob_eps == 1) {
+        return UCC_ERR_NOT_SUPPORTED;
+    }
     memcpy(&self->cfg, tl_ucp_config, sizeof(*tl_ucp_config));
     status = ucp_config_read(params->prefix, NULL, &ucp_config);
     if (UCS_OK != status) {

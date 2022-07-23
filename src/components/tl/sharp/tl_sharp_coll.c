@@ -1,5 +1,5 @@
 /**
- * Copyright (C) Mellanox Technologies Ltd. 2021-2022.  ALL RIGHTS RESERVED.
+ * Copyright (C) Mellanox Technologies Ltd. 2021.  ALL RIGHTS RESERVED.
  *
  * See file LICENSE for terms.
  */
@@ -27,12 +27,8 @@ enum sharp_datatype ucc_to_sharp_dtype[] = {
     [UCC_DT_PREDEFINED_ID(UCC_DT_FLOAT16)]  = SHARP_DTYPE_FLOAT_SHORT,
     [UCC_DT_PREDEFINED_ID(UCC_DT_FLOAT32)]  = SHARP_DTYPE_FLOAT,
     [UCC_DT_PREDEFINED_ID(UCC_DT_FLOAT64)]  = SHARP_DTYPE_DOUBLE,
-    [UCC_DT_PREDEFINED_ID(UCC_DT_FLOAT128)] = SHARP_DTYPE_NULL,
     // TODO in hpcx-2.11 add UCC_DT_BFLOAT16
-    [UCC_DT_PREDEFINED_ID(UCC_DT_BFLOAT16)]         = SHARP_DTYPE_NULL,
-    [UCC_DT_PREDEFINED_ID(UCC_DT_FLOAT32_COMPLEX)]  = SHARP_DTYPE_NULL,
-    [UCC_DT_PREDEFINED_ID(UCC_DT_FLOAT64_COMPLEX)]  = SHARP_DTYPE_NULL,
-    [UCC_DT_PREDEFINED_ID(UCC_DT_FLOAT128_COMPLEX)] = SHARP_DTYPE_NULL,
+    [UCC_DT_PREDEFINED_ID(UCC_DT_BFLOAT16)] = SHARP_DTYPE_NULL,
 };
 
 enum sharp_reduce_op ucc_to_sharp_reduce_op[] = {
@@ -96,8 +92,7 @@ ucc_tl_sharp_mem_register(ucc_tl_sharp_context_t *ctx, void *addr,
     }
 
     if (ctx->rcache) {
-        status = ucc_rcache_get(ctx->rcache, (void *)addr, length, NULL,
-                                &rregion);
+        status = ucc_rcache_get(ctx->rcache, (void *)addr, length, &rregion);
         if (status != UCC_OK) {
             tl_error(ctx->super.super.lib, "ucc_rcache_get failed");
             return UCC_ERR_INVALID_PARAM;

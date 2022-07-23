@@ -6,8 +6,8 @@
 
 #include "test_mpi.h"
 
-TestBarrier::TestBarrier(ucc_test_team_t &team, TestCaseParams &params) :
-    TestCase(team, UCC_COLL_TYPE_BARRIER, params)
+TestBarrier::TestBarrier(ucc_test_team_t &team) :
+    TestCase(team, UCC_COLL_TYPE_BARRIER)
 {
     status = UCC_OK;
     UCC_CHECK(ucc_collective_init(&args, &req, team.team));
@@ -38,7 +38,7 @@ ucc_status_t TestBarrier::test()
     return UCC_OK;
 }
 
-void TestBarrier::run(bool triggered)
+void TestBarrier::run()
 {
     int completed = 1;
     int *recv = NULL;

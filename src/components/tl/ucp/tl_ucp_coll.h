@@ -1,5 +1,5 @@
 /**
- * Copyright (C) Mellanox Technologies Ltd. 2022.  ALL RIGHTS RESERVED.
+ * Copyright (C) Mellanox Technologies Ltd. 2021.  ALL RIGHTS RESERVED.
  * Copyright (c) Meta Platforms, Inc. and affiliates. 2022.
  *
  * See file LICENSE for terms.
@@ -36,8 +36,7 @@ extern const char
 #define EXEC_TASK_TEST(_phase, _errmsg, _etask) do {                           \
     if (_etask != NULL) {                                                      \
         status = ucc_ee_executor_task_test(_etask);                            \
-        if (status > 0) {                                                      \
-            task->super.status = UCC_INPROGRESS;                               \
+        if (status == UCC_INPROGRESS) {                                        \
             SAVE_STATE(_phase);                                                \
             return;                                                            \
         }                                                                      \
@@ -130,14 +129,6 @@ typedef struct ucc_tl_ucp_task {
             void                   *scratch;
             ucc_mc_buffer_header_t *scratch_mc_header;
         } reduce_kn;
-        struct {
-            ucc_rank_t              dist;
-            ucc_rank_t              max_dist;
-            uint32_t                radix;
-            int                     phase;
-            void *                  scratch;
-            ucc_mc_buffer_header_t *scratch_mc_header;
-        } gather_kn;
     };
 } ucc_tl_ucp_task_t;
 
@@ -222,6 +213,12 @@ ucc_tl_ucp_init_task(ucc_base_coll_args_t *coll_args, ucc_base_team_t *team)
     }
 
     ucc_coll_task_init(&task->super, coll_args, team);
+    if (coll_args->mask & UCC_COLL_ARGS_FIELD_TAG) {
+        task->tagged.tag = coll_args->args.tag;
+    } else {
+        task->tagged.tag = tl_team->seq_num;
+        tl_team->seq_num     = (tl_team->seq_num + 1) % UCC_TL_UCP_MAX_COLL_TAG;
+    }
 
     if (UCC_COLL_ARGS_ACTIVE_SET(&coll_args->args)) {
         task->tagged.tag = (coll_args->mask & UCC_COLL_ARGS_FIELD_TAG)
@@ -235,13 +232,6 @@ ucc_tl_ucp_init_task(ucc_base_coll_args_t *coll_args, ucc_base_team_t *team)
            need to convert to subset local value */
         TASK_ARGS(task).root = ucc_ep_map_local_rank(task->subset.map,
                                                      coll_args->args.root);
-    } else {
-        if (coll_args->mask & UCC_COLL_ARGS_FIELD_TAG) {
-            task->tagged.tag = coll_args->args.tag;
-        } else {
-            tl_team->seq_num = (tl_team->seq_num + 1) % UCC_TL_UCP_MAX_COLL_TAG;
-            task->tagged.tag = tl_team->seq_num;
-        }
     }
 
     task->super.finalize       = ucc_tl_ucp_coll_finalize;

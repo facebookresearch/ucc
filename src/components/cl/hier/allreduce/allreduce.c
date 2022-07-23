@@ -12,12 +12,12 @@ ucc_base_coll_alg_info_t
         [UCC_CL_HIER_ALLREDUCE_ALG_RAB] =
             {.id   = UCC_CL_HIER_ALLREDUCE_ALG_RAB,
              .name = "rab",
-             .desc = "intra-node reduce, followed by inter-node allreduce,"
+             .desc = "innode reduce, followed by inter node allreduce,"
                      " followed by innode broadcast"},
         [UCC_CL_HIER_ALLREDUCE_ALG_SPLIT_RAIL] =
             {.id   = UCC_CL_HIER_ALLREDUCE_ALG_SPLIT_RAIL,
              .name = "split_rail",
-             .desc = "intra-node reduce_scatter, followed by PPN concurrent "
-                    " inter-node allreduces, followed by intra-node allgather"},
+             .desc = "innode reduce scatter, followed by PPN concurrent inter"
+                     " node allreduces, followed by innode allgather"},
         [UCC_CL_HIER_ALLREDUCE_ALG_LAST] = {
             .id = 0, .name = NULL, .desc = NULL}};

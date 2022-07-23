@@ -288,15 +288,6 @@ UCC_CORE_PROFILE_FUNC(ucc_status_t, ucc_collective_post, (request),
     return task->post(task);
 }
 
-UCC_CORE_PROFILE_FUNC(ucc_status_t, ucc_collective_init_and_post,
-                      (coll_args, request, team), ucc_coll_args_t *coll_args,
-                      ucc_coll_req_h *request, ucc_team_h team)
-{
-    ucc_error("ucc_collective_init_and_post() is not implemented");
-
-    return UCC_ERR_NOT_IMPLEMENTED;
-}
-
 UCC_CORE_PROFILE_FUNC(ucc_status_t, ucc_collective_finalize, (request),
                       ucc_coll_req_h request)
 {

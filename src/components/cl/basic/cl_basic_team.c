@@ -26,7 +26,6 @@ UCC_CLASS_INIT_FUNC(ucc_cl_basic_team_t, ucc_base_context_t *cl_context,
         goto err;
     }
     self->n_tl_teams = 0;
-    self->score_map  = NULL;
     status           = ucc_team_multiple_req_alloc(&self->team_create_req,
                                                    ctx->n_tl_ctxs);
     if (UCC_OK != status) {
@@ -94,9 +93,7 @@ ucc_status_t ucc_cl_basic_team_destroy(ucc_base_team_t *cl_team)
         }
     }
     ucc_team_multiple_req_free(team->team_create_req);
-    if (team->score_map) {
-        ucc_coll_score_free_map(team->score_map);
-    }
+    ucc_coll_score_free_map(team->score_map);
     ucc_free(team->tl_teams);
     UCC_CLASS_DELETE_FUNC_NAME(ucc_cl_basic_team_t)(cl_team);
     return status;
@@ -109,7 +106,6 @@ ucc_status_t ucc_cl_basic_team_create_test(ucc_base_team_t *cl_team)
     ucc_status_t            status;
     int                     i;
     ucc_coll_score_t       *score, *score_next, *score_merge;
-
     status = ucc_tl_team_create_multiple(team->team_create_req);
     if (status == UCC_OK) {
         for (i = 0; i < ctx->n_tl_ctxs; i++) {
@@ -120,9 +116,9 @@ ucc_status_t ucc_cl_basic_team_create_test(ucc_base_team_t *cl_team)
                         UCC_TL_CTX_IFACE(team->team_create_req->descs[i].ctx)->
                         super.name);
             } else {
-                cl_info(ctx->super.super.lib, "failed to create tl %s team: (%d)",
+                cl_info(ctx->super.super.lib, "failed to create tl %s team",
                         UCC_TL_CTX_IFACE(team->team_create_req->descs[i].ctx)->
-                        super.name, team->team_create_req->descs[i].status);
+                        super.name);
             }
         }
         ucc_team_multiple_req_free(team->team_create_req);

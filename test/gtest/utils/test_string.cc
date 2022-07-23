@@ -4,7 +4,6 @@
  */
 extern "C" {
 #include "utils/ucc_string.h"
-#include "utils/ucc_malloc.h"
 }
 #include <common/test.h>
 #include <string>
@@ -79,25 +78,4 @@ UCC_TEST_F(test_string, find_last)
 
     s = ucc_strstr_last(str2, "/tmp");
     EXPECT_EQ(str2, s);
-}
-
-UCC_TEST_F(test_string, concat)
-{
-    char *rst;
-
-    EXPECT_EQ(UCC_OK, ucc_str_concat("aaa", "bbb", &rst));
-    EXPECT_EQ("aaabbb", std::string(rst));
-    ucc_free(rst);
-
-    EXPECT_EQ(UCC_OK, ucc_str_concat("aaabbbccc", "d", &rst));
-    EXPECT_EQ("aaabbbcccd", std::string(rst));
-    ucc_free(rst);
-
-    EXPECT_EQ(UCC_OK, ucc_str_concat("aaa", "", &rst));
-    EXPECT_EQ("aaa", std::string(rst));
-    ucc_free(rst);
-
-    EXPECT_EQ(UCC_OK, ucc_str_concat("", "aaa", &rst));
-    EXPECT_EQ("aaa", std::string(rst));
-    ucc_free(rst);
 }

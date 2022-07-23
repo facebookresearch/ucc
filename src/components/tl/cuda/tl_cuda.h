@@ -22,8 +22,6 @@
 #endif
 
 #define UCC_TL_CUDA_MAX_PEERS 8
-#define UCC_TL_CUDA_MAX_RING_CHUNKS 8
-
 #define UCC_TL_CUDA_SUPPORTED_COLLS                                            \
     (UCC_COLL_TYPE_ALLTOALL | UCC_COLL_TYPE_ALLTOALLV |                        \
      UCC_COLL_TYPE_ALLGATHER | UCC_COLL_TYPE_ALLGATHERV |                      \
@@ -74,9 +72,6 @@ typedef struct ucc_tl_cuda_lib_config {
     ucc_tl_lib_config_t super;
     uint32_t            max_concurrent;
     size_t              scratch_size;
-    uint32_t            allgather_ring_max_rings;
-    uint32_t            allgather_ring_num_chunks;
-    uint32_t            reduce_scatter_ring_max_rings;
 } ucc_tl_cuda_lib_config_t;
 
 typedef struct ucc_tl_cuda_context_config {
@@ -131,7 +126,7 @@ typedef struct ucc_tl_cuda_rank_id {
 } ucc_tl_cuda_rank_id_t;
 
 typedef struct ucc_tl_cuda_sync {
-    int                    seq_num[UCC_TL_CUDA_MAX_RING_CHUNKS];
+    int                    seq_num;
     ucc_tl_cuda_mem_info_t mem_info_src;
     ucc_tl_cuda_mem_info_t mem_info_dst;
     cudaEvent_t            ipc_event_local;
@@ -202,12 +197,10 @@ struct ucc_tl_cuda_task {
         struct {
             int                     stage;
             int                     num_frags;
-            int                     num_rings;
-            int                     num_chunks;
             ucc_datatype_t          dt;
             void                   *sbuf;
             void                   *rbuf;
-            ucc_ee_executor_task_t *exec_task[2 * UCC_TL_CUDA_MAX_RING_CHUNKS];
+            ucc_ee_executor_task_t *exec_task[2];
             size_t (*get_count)(const ucc_tl_cuda_task_t *task,
                                 ucc_rank_t                block);
             size_t (*get_offset)(const ucc_tl_cuda_task_t *task,
@@ -216,25 +209,10 @@ struct ucc_tl_cuda_task {
         struct {
             int                     stage;
             int                     num_frags;
-            int                     num_posted;
-            int                     num_completed;
-            ucc_datatype_t          dt;
-            void *                  sbuf;
-            void *                  rbuf;
-            ucc_ee_executor_task_t *exec_task[2 * UCC_TL_CUDA_MAX_PEERS];
-            size_t (*get_count)(const ucc_tl_cuda_task_t *task,
-                                ucc_rank_t                block);
-            size_t (*get_offset)(const ucc_tl_cuda_task_t *task,
-                                 ucc_rank_t                block);
-        } allgatherv_linear;
-        struct {
-            int                     stage;
-            int                     num_frags;
-            int                     num_rings;
             ucc_datatype_t          dt;
             void                   *sbuf;
             void                   *rbuf;
-            ucc_ee_executor_task_t *exec_task[UCC_TL_CUDA_MAX_RING_CHUNKS];
+            ucc_ee_executor_task_t *exec_task;
             size_t (*get_count)(const ucc_tl_cuda_task_t *task,
                                 ucc_rank_t                block);
             size_t (*get_offset)(const ucc_tl_cuda_task_t *task,
