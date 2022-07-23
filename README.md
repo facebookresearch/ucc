@@ -1,4 +1,4 @@
-# Unified Collective Communication (UCC)
+# Unified Collective Communication (UCC) - change for screenshotting import
 
 <img src="docs/images/ucc_logo.png" width="75%" height="75%">
 
