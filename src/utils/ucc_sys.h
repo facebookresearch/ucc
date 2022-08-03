@@ -17,6 +17,9 @@ ucc_status_t ucc_sysv_alloc(size_t *size, void **addr, int *shm_id);
 
 ucc_status_t ucc_sysv_free(void *addr);
 
+const char* ucc_sys_get_lib_path();
+char *ucc_sys_dirname(const char* path);
+
 size_t ucc_get_page_size();
 
 #endif
