@@ -157,6 +157,12 @@ UCC_KN_PHASE_EXTRA_REDUCE:
                      (avg_pre_op ? ucc_knomial_pattern_loop_first_iteration(p)
                                  : ucc_knomial_pattern_loop_last_iteration(p));
 
+            if (task->reduce_scatter_kn.scratch_mc_header &&
+                ucc_knomial_pattern_loop_last_iteration(p)) {
+                ucc_sra_kn_get_offset_and_seglen(count, dt_size, rank, size, radix,
+                                                 &offset, &local_seg_count);
+                reduce_data = PTR_OFFSET(args->dst.info.buffer, offset);
+            }
             status = ucc_dt_reduce_strided(
                 local_data, rbuf, reduce_data,
                 task->tagged.send_posted - p->iteration * (radix - 1),
@@ -177,23 +183,24 @@ UCC_KN_PHASE_REDUCE:
         ucc_knomial_pattern_next_iteration(p);
     }
 
-    ucc_sra_kn_get_offset_and_seglen(count, dt_size, rank, size, radix,
-                                     &offset, &local_seg_count);
-    eargs.task_type = UCC_EE_EXECUTOR_TASK_COPY;
-    eargs.copy.dst  = PTR_OFFSET(args->dst.info.buffer, offset);
-    eargs.copy.src  = task->reduce_scatter_kn.scratch;
-    eargs.copy.len  = local_seg_count * dt_size;
-    status = ucc_ee_executor_task_post(task->reduce_scatter_kn.executor, &eargs,
-                                       &task->reduce_scatter_kn.etask);
-    if (ucc_unlikely(status != UCC_OK)) {
-        tl_error(UCC_TASK_LIB(task), "failed to copy data to dst buffer");
-        task->super.status = status;
-        return;
+    if (!task->reduce_scatter_kn.scratch_mc_header) {
+        ucc_sra_kn_get_offset_and_seglen(count, dt_size, rank, size, radix,
+                                         &offset, &local_seg_count);
+        eargs.task_type = UCC_EE_EXECUTOR_TASK_COPY;
+        eargs.copy.dst  = PTR_OFFSET(args->dst.info.buffer, offset);
+        eargs.copy.src  = task->reduce_scatter_kn.scratch;
+        eargs.copy.len  = local_seg_count * dt_size;
+        status = ucc_ee_executor_task_post(task->reduce_scatter_kn.executor, &eargs,
+                                           &task->reduce_scatter_kn.etask);
+        if (ucc_unlikely(status != UCC_OK)) {
+            tl_error(UCC_TASK_LIB(task), "failed to copy data to dst buffer");
+            task->super.status = status;
+            return;
+        }
+    UCC_KN_PHASE_COMPLETE:
+        EXEC_TASK_TEST(UCC_KN_PHASE_COMPLETE, "failed to perform memcpy",
+                       task->reduce_scatter_kn.etask);
     }
-UCC_KN_PHASE_COMPLETE:
-    EXEC_TASK_TEST(UCC_KN_PHASE_COMPLETE, "failed to perform memcpy",
-                   task->reduce_scatter_kn.etask);
-
 UCC_KN_PHASE_PROXY: /* unused label */
 out:
     UCC_TL_UCP_PROFILE_REQUEST_EVENT(coll_task, "ucp_reduce_scatter_kn_done",
@@ -249,11 +256,10 @@ ucc_status_t ucc_tl_ucp_reduce_scatter_knomial_init_r(
     size_t             count     = coll_args->args.dst.info.count;
     ucc_datatype_t     dt        = coll_args->args.dst.info.datatype;
     size_t             dt_size   = ucc_dt_size(dt);
-    size_t             data_size = count * dt_size;
     ucc_memory_type_t  mem_type  = coll_args->args.dst.info.mem_type;
     ucc_tl_ucp_task_t *task;
     ucc_status_t       status;
-    size_t             max_recv_size;
+    size_t             max_recv_size, data_size;
     ucc_kn_radix_t     step_radix;
 
     task                 = ucc_tl_ucp_init_task(coll_args, team);
@@ -268,6 +274,10 @@ ucc_status_t ucc_tl_ucp_reduce_scatter_knomial_init_r(
     task->reduce_scatter_kn.scratch_mc_header = NULL;
 
     if (KN_NODE_EXTRA != task->reduce_scatter_kn.p.node_type) {
+        if (coll_args->mask & UCC_BASE_CARGS_MAX_FRAG_COUNT) {
+            count = coll_args->max_frag_count;
+        }
+        data_size = count * dt_size;
         step_radix =
             ucc_sra_kn_compute_step_radix(rank, size,
                                           &task->reduce_scatter_kn.p);

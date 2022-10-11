@@ -26,11 +26,8 @@ ucc_cl_hier_ar_split_rail_schedule_finalize(ucc_coll_task_t *task)
 {
     ucc_cl_hier_schedule_t *schedule =
         ucc_derived_of(task, ucc_cl_hier_schedule_t);
-    ucc_status_t status = UCC_OK;
+    ucc_status_t status;
 
-    if (schedule->scratch) {
-        ucc_mc_free(schedule->scratch);
-    }
     status = ucc_schedule_pipelined_finalize(&schedule->super.super.super);
     ucc_cl_hier_put_schedule(&schedule->super.super);
     return status;
@@ -41,8 +38,6 @@ static ucc_status_t ucc_cl_hier_allreduce_split_rail_frag_setup(
 {
     ucc_cl_hier_team_t *cl_team =
         ucc_derived_of(schedule_p->super.super.team, ucc_cl_hier_team_t);
-    ucc_cl_hier_schedule_t *sched =
-        ucc_derived_of(schedule_p, ucc_cl_hier_schedule_t);
     ucc_coll_args_t *args    = &schedule_p->super.super.bargs.args;
     size_t           dt_size = ucc_dt_size(args->dst.info.datatype);
     int              n_frags = schedule_p->super.n_tasks;
@@ -77,29 +72,20 @@ static ucc_status_t ucc_cl_hier_allreduce_split_rail_frag_setup(
     ucc_assert(task_rs->bargs.args.dst.info_v.counts == counts);
 
     if (inplace) {
-        task_rs->bargs.args.src.info.buffer =
-            PTR_OFFSET(args->dst.info.buffer, frag_offset * dt_size);
         task_rs->bargs.args.dst.info_v.buffer = PTR_OFFSET(
-            sched->scratch->addr, (frag_offset + ar_offset) * dt_size);
+            args->dst.info.buffer, frag_offset  * dt_size);
     } else {
         task_rs->bargs.args.src.info.buffer =
             PTR_OFFSET(args->src.info.buffer, frag_offset * dt_size);
+        task_rs->bargs.args.src.info.count = frag_count;
         task_rs->bargs.args.dst.info_v.buffer = PTR_OFFSET(
             args->dst.info.buffer, (frag_offset + ar_offset) * dt_size);
-        task_rs->bargs.args.src.info.count = frag_count;
     }
 
-    task_ar->bargs.args.src.info.count = ar_count;
+
     task_ar->bargs.args.dst.info.count = ar_count;
-    if (!inplace) {
-        task_ar->bargs.args.dst.info.buffer =
-            task_rs->bargs.args.dst.info_v.buffer;
-    } else {
-        task_ar->bargs.args.src.info.buffer =
-            task_rs->bargs.args.dst.info_v.buffer;
-        task_ar->bargs.args.dst.info.buffer = PTR_OFFSET(
-            args->dst.info.buffer, (frag_offset + ar_offset) * dt_size);
-    }
+    task_ar->bargs.args.dst.info.buffer = PTR_OFFSET(
+        args->dst.info.buffer, (frag_offset + ar_offset) * dt_size);
 
     ucc_assert(UCC_IS_INPLACE(task_ag->bargs.args));
     task_ag->bargs.args.dst.info_v.buffer = PTR_OFFSET(
@@ -115,10 +101,10 @@ static ucc_status_t ucc_cl_hier_allreduce_split_rail_frag_init(
     ucc_base_team_t *team, ucc_schedule_t **frag_p)
 {
     ucc_cl_hier_team_t *    cl_team = ucc_derived_of(team, ucc_cl_hier_team_t);
-    ucc_cl_hier_schedule_t *sched = ucc_derived_of(sp, ucc_cl_hier_schedule_t);
     size_t           dt_size = ucc_dt_size(coll_args->args.dst.info.datatype);
     ucc_status_t     status  = UCC_OK;
     int              inplace = UCC_IS_INPLACE(coll_args->args);
+    int              n_frags = sp->super.n_tasks;
     ucc_coll_task_t *task_rs, *task_ag, *task_ar;
     ucc_base_coll_args_t    rs_args, ar_args, ag_args;
     ucc_cl_hier_schedule_t *cl_schedule;
@@ -141,6 +127,12 @@ static ucc_status_t ucc_cl_hier_allreduce_split_rail_frag_init(
     }
 
     node_size   = cl_team->sbgps[UCC_HIER_SBGP_NODE].sbgp->group_size;
+    if (ucc_unlikely(0 == node_size)) {
+        /* this check is only needed to suppress clang-tidy linter which
+           assumes potential devision-by-zero when node_size is passed to
+           ucc_buffer_block_count */
+        goto err_rs;
+    }
     node_rank   = cl_team->sbgps[UCC_HIER_SBGP_NODE].sbgp->group_rank;
     total_count = coll_args->args.dst.info.count;
 
@@ -172,11 +164,18 @@ static ucc_status_t ucc_cl_hier_allreduce_split_rail_frag_init(
     rs_args.args.dst.info_v.counts   = counts;
     rs_args.args.dst.info_v.mem_type = coll_args->args.dst.info.mem_type;
     rs_args.args.dst.info_v.datatype = coll_args->args.dst.info.datatype;
+    rs_args.max_frag_count = ucc_buffer_block_count(
+        ucc_buffer_block_count(total_count, n_frags, 0), node_size, 0);
+    rs_args.mask |= UCC_BASE_CARGS_MAX_FRAG_COUNT;
+
+
     if (inplace) {
+        rs_args.args.mask  |= UCC_COLL_ARGS_FIELD_FLAGS;
+        rs_args.args.flags |= UCC_COLL_ARGS_FLAG_IN_PLACE;
         rs_args.args.src.info.buffer   = coll_args->args.dst.info.buffer;
         rs_args.args.src.info.datatype = coll_args->args.dst.info.datatype;
-        rs_args.args.dst.info_v.buffer =
-            PTR_OFFSET(sched->scratch->addr, displs[node_rank] * dt_size);
+        rs_args.args.dst.info_v.buffer = PTR_OFFSET(
+            coll_args->args.dst.info.buffer, displs[node_rank] * dt_size);
     } else {
         rs_args.args.dst.info_v.buffer = PTR_OFFSET(
             coll_args->args.dst.info.buffer, displs[node_rank] * dt_size);
@@ -190,18 +189,14 @@ static ucc_status_t ucc_cl_hier_allreduce_split_rail_frag_init(
     }
 
     /* ALLREDUCE */
+    ar_args.mask |= UCC_BASE_CARGS_MAX_FRAG_COUNT;
+    ar_args.max_frag_count      = ucc_buffer_block_count(total_count,
+                                                         n_frags, 0);
     ar_args.args.coll_type      = UCC_COLL_TYPE_ALLREDUCE;
     ar_args.args.src.info.count = counts[node_rank];
-    if (!inplace) {
-        ar_args.args.mask  |= UCC_COLL_ARGS_FIELD_FLAGS;
-        ar_args.args.flags |= UCC_COLL_ARGS_FLAG_IN_PLACE;
-        ar_args.args.dst.info.count = counts[node_rank];
-    } else {
-        ar_args.args.flags &= (~UCC_COLL_ARGS_FLAG_IN_PLACE);
-        ar_args.args.src.info.buffer = rs_args.args.dst.info.buffer;
-        ar_args.args.dst.info.buffer = PTR_OFFSET(
-            coll_args->args.dst.info.buffer, displs[node_rank] * dt_size);
-    }
+    ar_args.args.mask  |= UCC_COLL_ARGS_FIELD_FLAGS;
+    ar_args.args.flags |= UCC_COLL_ARGS_FLAG_IN_PLACE;
+    ar_args.args.dst.info.count = counts[node_rank];
 
     status = ucc_coll_init(SCORE_MAP(cl_team, NET), &ar_args, &task_ar);
     if (ucc_unlikely(UCC_OK != status)) {
@@ -227,20 +222,20 @@ static ucc_status_t ucc_cl_hier_allreduce_split_rail_frag_init(
         goto err_ag;
     }
 
-    task_rs->n_deps = 1;
-    ucc_schedule_add_task(schedule, task_rs);
-    ucc_event_manager_subscribe(&schedule->super.em, UCC_EVENT_SCHEDULE_STARTED,
-                                task_rs, ucc_dependency_handler);
+    UCC_CHECK_GOTO(ucc_schedule_add_task(schedule, task_rs), err_ag, status);
+    UCC_CHECK_GOTO(ucc_task_subscribe_dep(&schedule->super, task_rs,
+                                          UCC_EVENT_SCHEDULE_STARTED),
+                   err_ag, status);
 
-    task_ar->n_deps = 1;
-    ucc_schedule_add_task(schedule, task_ar);
-    ucc_event_manager_subscribe(&task_rs->em, UCC_EVENT_COMPLETED, task_ar,
-                                ucc_dependency_handler);
+    UCC_CHECK_GOTO(ucc_schedule_add_task(schedule, task_ar), err_ag, status);
+    UCC_CHECK_GOTO(ucc_task_subscribe_dep(task_rs, task_ar,
+                                          UCC_EVENT_COMPLETED),
+                   err_ag, status);
 
-    task_ag->n_deps = 1;
-    ucc_schedule_add_task(schedule, task_ag);
-    ucc_event_manager_subscribe(&task_ar->em, UCC_EVENT_COMPLETED, task_ag,
-                                ucc_dependency_handler);
+    UCC_CHECK_GOTO(ucc_schedule_add_task(schedule, task_ag), err_ag, status);
+    UCC_CHECK_GOTO(ucc_task_subscribe_dep(task_ar, task_ag,
+                                          UCC_EVENT_COMPLETED),
+                   err_ag, status);
 
     schedule->super.post     = ucc_schedule_start;
     schedule->super.progress = NULL;
@@ -306,8 +301,6 @@ UCC_CL_HIER_PROFILE_FUNC(ucc_status_t, ucc_cl_hier_allreduce_split_rail_init,
 {
     ucc_cl_hier_team_t *cl_team = ucc_derived_of(team, ucc_cl_hier_team_t);
     ucc_cl_hier_lib_config_t *cfg   = &UCC_CL_HIER_TEAM_LIB(cl_team)->cfg;
-    size_t                    count = coll_args->args.dst.info.count;
-    size_t data_size = count * ucc_dt_size(coll_args->args.dst.info.datatype);
     ucc_cl_hier_schedule_t *schedule;
     int                 n_frags, pipeline_depth;
     ucc_status_t status;
@@ -331,23 +324,12 @@ UCC_CL_HIER_PROFILE_FUNC(ucc_status_t, ucc_cl_hier_allreduce_split_rail_init,
         return UCC_ERR_NO_MEMORY;
     }
 
-    if (UCC_IS_INPLACE(coll_args->args)) {
-        status = ucc_mc_alloc(&schedule->scratch, data_size,
-                              coll_args->args.dst.info.mem_type);
-        if (ucc_unlikely(UCC_OK != status)) {
-            cl_error(team->context->lib,
-                     "failed to allocate %zd bytes for inplace scratch",
-                     data_size);
-            goto err_scratch;
-        }
-    }
-
     get_n_frags(coll_args, cl_team, &n_frags, &pipeline_depth);
 
     status = ucc_schedule_pipelined_init(
         coll_args, team, ucc_cl_hier_allreduce_split_rail_frag_init,
         ucc_cl_hier_allreduce_split_rail_frag_setup, pipeline_depth, n_frags,
-        cfg->allreduce_split_rail_seq, &schedule->super);
+        cfg->allreduce_split_rail_pipeline_order, &schedule->super);
 
     if (ucc_unlikely(status != UCC_OK)) {
         cl_error(team->context->lib,
@@ -363,10 +345,6 @@ UCC_CL_HIER_PROFILE_FUNC(ucc_status_t, ucc_cl_hier_allreduce_split_rail_init,
     return UCC_OK;
 
 err_pipe_init:
-    if (schedule->scratch) {
-        ucc_mc_free(schedule->scratch);
-    }
-err_scratch:
     ucc_cl_hier_put_schedule(&schedule->super.super);
     return status;
 }
