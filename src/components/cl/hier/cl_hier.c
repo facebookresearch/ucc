@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2020-2022, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2020-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  *
  * See file LICENSE for terms.
  */
@@ -12,6 +12,9 @@
 
 ucc_status_t ucc_cl_hier_get_lib_attr(const ucc_base_lib_t *lib,
                                       ucc_base_lib_attr_t  *base_attr);
+
+ucc_status_t ucc_cl_hier_get_lib_properties(ucc_base_lib_properties_t *prop);
+
 ucc_status_t ucc_cl_hier_get_context_attr(const ucc_base_context_t *context,
                                           ucc_base_ctx_attr_t      *base_attr);
 
@@ -53,35 +56,25 @@ static ucc_config_field_t ucc_cl_hier_lib_config_table[] = {
      ucc_offsetof(ucc_cl_hier_lib_config_t, a2av_node_thresh),
      UCC_CONFIG_TYPE_MEMUNITS},
 
-    {"ALLREDUCE_SPLIT_RAIL_FRAG_THRESH", "inf",
-     "Threshold to enable fragmentation and pipelining of Split_Rail "
-     "allreduce alg",
-     ucc_offsetof(ucc_cl_hier_lib_config_t, allreduce_split_rail_frag_thresh),
-     UCC_CONFIG_TYPE_MEMUNITS},
+    {"ALLREDUCE_SPLIT_RAIL_PIPELINE", "n",
+     "Pipelining settings for SplitRail allreduce algorithm",
+     ucc_offsetof(ucc_cl_hier_lib_config_t, allreduce_split_rail_pipeline),
+     UCC_CONFIG_TYPE_PIPELINE_PARAMS},
 
-    {"ALLREDUCE_SPLIT_RAIL_FRAG_SIZE", "inf",
-     "Maximum allowed fragment size of Split_Rail alg",
-     ucc_offsetof(ucc_cl_hier_lib_config_t, allreduce_split_rail_frag_size),
-     UCC_CONFIG_TYPE_MEMUNITS},
+    {"ALLREDUCE_RAB_PIPELINE", "n",
+     "Pipelining settings for RAB allreduce algorithm",
+     ucc_offsetof(ucc_cl_hier_lib_config_t, allreduce_rab_pipeline),
+     UCC_CONFIG_TYPE_PIPELINE_PARAMS},
 
-    {"ALLREDUCE_SPLIT_RAIL_N_FRAGS", "2",
-     "Number of fragments each allreduce is split into when Split_Rail alg is "
-     "used\n"
-     "The actual number of fragments can be larger if fragment size exceeds\n"
-     "ALLREDUCE_SPLIT_RAIL_FRAG_SIZE",
-     ucc_offsetof(ucc_cl_hier_lib_config_t, allreduce_split_rail_n_frags),
-     UCC_CONFIG_TYPE_UINT},
+    {"BCAST_2STEP_PIPELINE", "n",
+     "Pipelining settings for RAB bcast algorithm",
+     ucc_offsetof(ucc_cl_hier_lib_config_t, bcast_2step_pipeline),
+     UCC_CONFIG_TYPE_PIPELINE_PARAMS},
 
-    {"ALLREDUCE_SPLIT_RAIL_PIPELINE_DEPTH", "2",
-     "Number of fragments simultaneously progressed by the Split_Rail alg",
-     ucc_offsetof(ucc_cl_hier_lib_config_t,
-                  allreduce_split_rail_pipeline_depth),
-     UCC_CONFIG_TYPE_UINT},
-
-    {"ALLREDUCE_SPLIT_RAIL_SEQUENTIAL", "n",
-     "Type of pipelined schedule for Split_Rail alg (sequential/parallel)",
-     ucc_offsetof(ucc_cl_hier_lib_config_t, allreduce_split_rail_seq),
-     UCC_CONFIG_TYPE_BOOL},
+    {"REDUCE_2STEP_PIPELINE", "n",
+     "Pipelining settings for RAB reduce algorithm",
+     ucc_offsetof(ucc_cl_hier_lib_config_t, reduce_2step_pipeline),
+     UCC_CONFIG_TYPE_PIPELINE_PARAMS},
 
     {NULL}};
 
@@ -122,4 +115,6 @@ __attribute__((constructor)) static void cl_hier_iface_init(void)
         ucc_cl_hier_alltoall_algs;
     ucc_cl_hier.super.alg_info[ucc_ilog2(UCC_COLL_TYPE_ALLTOALLV)] =
         ucc_cl_hier_alltoallv_algs;
+    ucc_cl_hier.super.alg_info[ucc_ilog2(UCC_COLL_TYPE_BCAST)] =
+        ucc_cl_hier_bcast_algs;
 }

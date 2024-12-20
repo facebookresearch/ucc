@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2021, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2021-2022, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  *
  * See file LICENSE for terms.
  */
@@ -10,7 +10,7 @@
 #include "tl_cuda.h"
 #include "components/mc/ucc_mc.h"
 
-#define UCC_TL_CUDA_N_DEFAULT_ALG_SELECT_STR 2
+#define UCC_TL_CUDA_N_DEFAULT_ALG_SELECT_STR 4
 extern const char
     *ucc_tl_cuda_default_alg_select_str[UCC_TL_CUDA_N_DEFAULT_ALG_SELECT_STR];
 
@@ -55,6 +55,11 @@ static inline ucc_tl_cuda_task_t *ucc_tl_cuda_task_get(ucc_tl_cuda_team_t *team)
     ucc_tl_cuda_context_t *ctx  = UCC_TL_CUDA_TEAM_CTX(team);
     ucc_tl_cuda_task_t    *task = ucc_mpool_get(&ctx->req_mp);
 
+    if (ucc_unlikely(!task)) {
+        tl_error(UCC_TL_CUDA_TEAM_LIB(team), "failed to get task from mpool");
+        return NULL;
+    }
+
     UCC_TL_CUDA_PROFILE_REQUEST_NEW(task, "tl_cuda_task", 0);
     task->super.status = UCC_OPERATION_INITIALIZED;
     task->super.flags  = 0;
@@ -69,24 +74,43 @@ static inline void ucc_tl_cuda_task_put(ucc_tl_cuda_task_t *task)
     ucc_mpool_put(task);
 }
 
-static inline ucc_tl_cuda_task_t *
-ucc_tl_cuda_task_init(ucc_base_coll_args_t *coll_args,
-                      ucc_tl_cuda_team_t *team)
+static inline
+ucc_status_t ucc_tl_cuda_task_init(ucc_base_coll_args_t *coll_args,
+                                   ucc_tl_cuda_team_t *team,
+                                   ucc_tl_cuda_task_t **task_h)
 {
-    ucc_tl_cuda_task_t *task = ucc_tl_cuda_task_get(team);
-    uint32_t max_concurrent;
+    ucc_rank_t          trank          = UCC_TL_TEAM_RANK(team);
+    ucc_tl_cuda_lib_t  *lib            = UCC_TL_CUDA_TEAM_LIB(team);
+    uint32_t            max_concurrent = lib->cfg.max_concurrent;
+    ucc_tl_cuda_task_t *task;
+    ucc_status_t        status;
 
-    max_concurrent = UCC_TL_CUDA_TEAM_LIB(team)->cfg.max_concurrent;
-    ucc_coll_task_init(&task->super, coll_args, &team->super.super);
+    if (!ucc_coll_args_is_predefined_dt(&coll_args->args, trank)) {
+        return UCC_ERR_NOT_SUPPORTED;
+    }
+
+    task = ucc_tl_cuda_task_get(team);
+    if (ucc_unlikely(!task)) {
+        return UCC_ERR_NO_MEMORY;
+    }
+
+    status = ucc_coll_task_init(&task->super, coll_args, &team->super.super);
+    if (ucc_unlikely(status != UCC_OK)) {
+        ucc_tl_cuda_task_put(task);
+        return status;
+    }
+
     task->seq_num = team->seq_num++;
     task->coll_id = task->seq_num % max_concurrent;
-    return task;
+
+    *task_h = task;
+    return UCC_OK;
 }
 
 static inline ucc_status_t ucc_tl_cuda_get_sync(ucc_tl_cuda_task_t *task)
 {
-    ucc_tl_cuda_team_t       *team  = TASK_TEAM(task);
-    ucc_tl_cuda_sync_state_t *state = &team->sync_state[task->coll_id];
+    ucc_tl_cuda_team_t                *team  = TASK_TEAM(task);
+    volatile ucc_tl_cuda_sync_state_t *state = &team->sync_state[task->coll_id];
 
     if ((UCC_TL_TEAM_RANK(team) == 0) && (*state == 0)) {
         *state = task->seq_num;

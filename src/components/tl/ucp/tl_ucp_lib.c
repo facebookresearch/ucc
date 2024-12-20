@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2022, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2022-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  *
  * See file LICENSE for terms.
  */
@@ -7,7 +7,7 @@
 #include "tl_ucp.h"
 #include "utils/ucc_malloc.h"
 
-/* NOLINTNEXTLINE  params is not used*/
+/* NOLINTNEXTLINE  params is not used */
 UCC_CLASS_INIT_FUNC(ucc_tl_ucp_lib_t, const ucc_base_lib_params_t *params,
                     const ucc_base_config_t *config)
 {
@@ -21,20 +21,22 @@ UCC_CLASS_INIT_FUNC(ucc_tl_ucp_lib_t, const ucc_base_lib_params_t *params,
 
     UCC_CLASS_CALL_SUPER_INIT(ucc_tl_lib_t, &ucc_tl_ucp.super,
                               &tl_ucp_config->super);
-    memcpy(&self->cfg, tl_ucp_config, sizeof(*tl_ucp_config));
+    status = ucc_config_clone_table(tl_ucp_config, &self->cfg,
+                                    ucc_tl_ucp_lib_config_table);
+    if (UCC_OK != status) {
+        return status;
+    }
+
     if (tl_ucp_config->kn_radix > 0) {
         self->cfg.barrier_kn_radix        = tl_ucp_config->kn_radix;
-        self->cfg.allreduce_kn_radix      = tl_ucp_config->kn_radix;
-        self->cfg.allreduce_sra_kn_radix  = tl_ucp_config->kn_radix;
         self->cfg.reduce_scatter_kn_radix = tl_ucp_config->kn_radix;
         self->cfg.allgather_kn_radix      = tl_ucp_config->kn_radix;
         self->cfg.bcast_kn_radix          = tl_ucp_config->kn_radix;
-        self->cfg.bcast_sag_kn_radix      = tl_ucp_config->kn_radix;
         self->cfg.reduce_kn_radix         = tl_ucp_config->kn_radix;
         self->cfg.scatter_kn_radix        = tl_ucp_config->kn_radix;
         self->cfg.gather_kn_radix         = tl_ucp_config->kn_radix;
     }
-
+    self->cfg.alltoallv_hybrid_radix = 2;
     self->tlcp_configs = NULL;
     if (n_plugins) {
         self->tlcp_configs = ucc_malloc(sizeof(void*)*n_plugins, "tlcp_configs");
@@ -56,16 +58,15 @@ UCC_CLASS_INIT_FUNC(ucc_tl_ucp_lib_t, const ucc_base_lib_params_t *params,
                 goto err_cfg;
             }
             status = ucc_config_parser_fill_opts(self->tlcp_configs[i],
-                                                 tlcp->config.table,
-                                                 params->full_prefix,
-                                                 ucc_tl_ucp.super.tl_lib_config.prefix, 0);
+                                                 &tlcp->config,
+                                                 params->full_prefix, 0);
             if (status != UCC_OK) {
                 tl_error(&self->super, "failed to read tlcp config");
                 goto err_cfg;
             }
         }
     }
-    tl_info(&self->super, "initialized lib object: %p", self);
+    tl_debug(&self->super, "initialized lib object: %p", self);
     return UCC_OK;
 
 err_cfg:
@@ -78,7 +79,8 @@ err:
 
 UCC_CLASS_CLEANUP_FUNC(ucc_tl_ucp_lib_t)
 {
-    tl_info(&self->super, "finalizing lib object: %p", self);
+    ucc_config_parser_release_opts(&self->cfg, ucc_tl_ucp_lib_config_table);
+    tl_debug(&self->super, "finalizing lib object: %p", self);
 }
 
 UCC_CLASS_DEFINE(ucc_tl_ucp_lib_t, ucc_tl_lib_t);
@@ -116,5 +118,21 @@ ucc_status_t ucc_tl_ucp_get_lib_attr(const ucc_base_lib_t *lib, /* NOLINT */
     }
     attr->super.attr.coll_types = UCC_TL_UCP_SUPPORTED_COLLS;
     attr->super.flags           = UCC_BASE_LIB_FLAG_TEAM_ID_REQUIRED;
+    if (base_attr->mask & UCC_BASE_LIB_ATTR_FIELD_MIN_TEAM_SIZE) {
+        attr->super.min_team_size = lib->min_team_size;
+    }
+
+    if (base_attr->mask & UCC_BASE_LIB_ATTR_FIELD_MAX_TEAM_SIZE) {
+        attr->super.max_team_size = UCC_RANK_MAX;
+    }
+
+    return UCC_OK;
+}
+
+ucc_status_t ucc_tl_ucp_get_lib_properties(ucc_base_lib_properties_t *prop)
+{
+    prop->default_team_size = 2;
+    prop->min_team_size     = 2;
+    prop->max_team_size     = UCC_RANK_MAX;
     return UCC_OK;
 }

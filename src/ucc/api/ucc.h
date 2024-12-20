@@ -1,7 +1,7 @@
 /**
  * @file ucc.h
  * @date 2020
- * @copyright (c) 2020-2022, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * @copyright (c) 2020-2024, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * @copyright Copyright (C) Huawei Technologies Co., Ltd. 2020.  ALL RIGHTS RESERVED.
  * @copyright Copyright (C) UChicago Argonne, LLC. 2022.  ALL RIGHTS RESERVED.
  *
@@ -51,6 +51,13 @@ BEGIN_C_DECLS
   */
 
 /**
+  * @defgroup UCC_LIB_INTERNAL Internal library routines
+  * @{
+  * Internal library routines
+  * @}
+  */
+
+/**
   * @defgroup UCC_CONTEXT_DT Context abstraction data-structures
   * @{
   *  Data-structures associated with context creation and management routines
@@ -94,7 +101,7 @@ BEGIN_C_DECLS
   */
 
 /**
-  * @defgroup UCC_EVENT_DT Events and Triggered operations' datastructures
+  * @defgroup UCC_EVENT_DT Events and Triggered operations' data-structures
   * @{
   *  Data-structures associated with event-driven collective execution
   * @}
@@ -473,7 +480,7 @@ typedef enum {
  *
  *  @ref ucc_thread_mode_t is used to initialize the UCC library’s thread mode.
  *  The UCC library can be configured in three thread modes UCC_THREAD_SINGLE,
- *  UCC_THREAD_FUNNELED, and UCC_LIB_THREAD_MULTIPLE. In the UCC_THREAD_SINGLE
+ *  UCC_THREAD_FUNNELED, and UCC_THREAD_MULTIPLE. In the UCC_THREAD_SINGLE
  *  mode, the user program must not be multithreaded. In the UCC_THREAD_FUNNELED
  *  mode, the user program may be multithreaded. However, all UCC interfaces
  *  should be invoked from the same thread. In the UCC_THREAD_MULTIPLE mode, the
@@ -703,6 +710,28 @@ void ucc_lib_config_print(const ucc_lib_config_h config, FILE *stream,
 
 ucc_status_t ucc_lib_config_modify(ucc_lib_config_h config, const char *name,
                                    const char *value);
+
+/**
+ * @ingroup UCC_LIB
+ * @brief Get UCC library version.
+ *
+ * This routine returns the UCC library version.
+ *
+ * @param [out] major_version       Filled with library major version.
+ * @param [out] minor_version       Filled with library minor version.
+ * @param [out] release_number      Filled with library release number.
+ */
+void ucc_get_version(unsigned *major_version, unsigned *minor_version,
+                     unsigned *release_number);
+
+/**
+ * @ingroup UCC_LIB
+ * @brief Get UCC library version as a string.
+ *
+ * This routine returns the UCC library version as a string which consists of:
+ * "major.minor.release".
+ */
+const char *ucc_get_version_string(void);
 
 
 /**
@@ -1306,7 +1335,7 @@ struct ucc_ep_map_cb {
  *  @ingroup UCC_TEAM_DT
  */
 typedef enum {
-    UCC_EP_MAP_FULL     = 1, /*!< The ep range of the team  spans all eps from a context*/
+    UCC_EP_MAP_FULL     = 1, /*!< The ep range of the team spans all eps from a context. */
     UCC_EP_MAP_STRIDED  = 2, /*!< The ep range of the team can be described by the 2 values: start, stride.*/
     UCC_EP_MAP_ARRAY    = 3, /*!< The ep range is given as an array of intergers that map the ep in the team to
                                        the team_context rank. */
@@ -1501,7 +1530,8 @@ typedef struct ucc_team_attr {
  *  @b Description
  *
  *  @ref ucc_team_create_post is a nonblocking collective operation to create
- *  the team handle. It takes in parameters ucc_context_h and ucc_team_params_t.
+ *  the team handle. Overlapping of multiple ucc\_team\_create\_post operations
+ *  are invalid. The post takes in parameters ucc_context_h and ucc_team_params_t.
  *  The ucc_team_params_t provides user configuration to customize the team and,
  *  ucc_context_h provides the resources for the team and collectives.
  *  The routine returns immediately after posting the operation with the
@@ -1691,6 +1721,45 @@ typedef enum {
 /**
  *  @ingroup UCC_COLLECTIVES_DT
  */
+typedef enum {
+    UCC_COLL_ARGS_HINT_OPTIMIZE_OVERLAP_CPU  = UCC_BIT(24), /*!< When the flag is
+                                                              set, the user
+                                                              prefers the library
+                                                              to choose an
+                                                              algorithm
+                                                              implementation
+                                                              optimized for the
+                                                              best overlap of CPU
+                                                              resources. */
+    UCC_COLL_ARGS_HINT_OPTIMIZE_OVERLAP_GPU  = UCC_BIT(25), /*!< When the flag is
+                                                              set, the user
+                                                              prefers the library
+                                                              to choose an
+                                                              algorithm
+                                                              implementation
+                                                              optimized for the
+                                                              best overlap of GPU
+                                                              resources. */
+    UCC_COLL_ARGS_HINT_OPTIMIZE_LATENCY     = UCC_BIT(26), /*!<  When the flag is
+                                                           set, the user prefers
+                                                           the library to choose
+                                                           an algorithm
+                                                           implementation
+                                                           optimized for the
+                                                           latency. */
+
+    UCC_COLL_ARGS_HINT_CONTIG_SRC_BUFFER    = UCC_COLL_ARGS_FLAG_CONTIG_SRC_BUFFER,
+                                                /*!< When the flag is set, the source
+                                                 * buffer is contiguous. */
+    UCC_COLL_ARGS_HINT_CONTIG_DST_BUFFER    = UCC_COLL_ARGS_FLAG_CONTIG_DST_BUFFER
+                                                /*!< When the flag is set, the
+                                                 * destination buffer is
+                                                 * contiguous. */
+} ucc_coll_args_hints_t;
+
+/**
+ *  @ingroup UCC_COLLECTIVES_DT
+ */
 typedef struct ucc_coll_buffer_info_v {
     void             *buffer; /*!< Starting address of the send/recv buffer */
     ucc_count_t      *counts; /*!< Array of counts of type @ref ucc_count_t
@@ -1788,7 +1857,8 @@ typedef struct ucc_coll_args {
                                              operation is selected.
                                              The field is only specified for collectives
                                              that use pre-defined datatypes */
-    uint64_t                        flags;
+    uint64_t                        flags; /*!< Provide flags and hints for the
+                                             collective operations */
     uint64_t                        root; /*!< Root endpoint for rooted
                                              collectives */
     ucc_error_type_t                error_type; /*!< Error type */
@@ -1957,7 +2027,8 @@ typedef enum ucc_event_type {
  *
  */
 typedef enum ucc_ee_type {
-    UCC_EE_CUDA_STREAM = 0,
+    UCC_EE_FIRST = 0,
+    UCC_EE_CUDA_STREAM = UCC_EE_FIRST,
     UCC_EE_CPU_THREAD,
     UCC_EE_ROCM_STREAM,
     UCC_EE_LAST,

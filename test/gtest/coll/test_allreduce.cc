@@ -7,6 +7,9 @@
 #include "common/test_ucc.h"
 #include "utils/ucc_math.h"
 
+// For sliding window allreduce
+#include "test_allreduce_sliding_window.h"
+
 #include <array>
 
 template<typename T>
@@ -23,8 +26,9 @@ class test_allreduce : public UccCollArgs, public testing::Test {
             ctxs[r] = (gtest_ucc_coll_ctx_t*)calloc(1, sizeof(gtest_ucc_coll_ctx_t));
             ctxs[r]->args = coll;
 
-            coll->coll_type = UCC_COLL_TYPE_ALLREDUCE;
-            coll->op        = T::redop;
+            coll->coll_type          = UCC_COLL_TYPE_ALLREDUCE;
+            coll->op                 = T::redop;
+            coll->global_work_buffer = NULL;
 
             ctxs[r]->init_buf = ucc_malloc(ucc_dt_size(dt) * count, "init buf");
             EXPECT_NE(ctxs[r]->init_buf, nullptr);
@@ -213,6 +217,23 @@ TYPED_TEST(test_allreduce_cuda, single_persistent_inplace)
 {
     TEST_DECLARE(UCC_MEMORY_TYPE_CUDA, TEST_INPLACE, 3, 1);
 }
+TYPED_TEST(test_allreduce_cuda, single_managed) {
+    TEST_DECLARE( UCC_MEMORY_TYPE_CUDA_MANAGED, TEST_NO_INPLACE, 1, 0);
+}
+
+TYPED_TEST(test_allreduce_cuda, single_persistent_managed)
+{
+    TEST_DECLARE( UCC_MEMORY_TYPE_CUDA_MANAGED, TEST_NO_INPLACE, 3, 1);
+}
+
+TYPED_TEST(test_allreduce_cuda, single_inplace_managed) {
+    TEST_DECLARE( UCC_MEMORY_TYPE_CUDA_MANAGED, TEST_INPLACE, 1, 0);
+}
+
+TYPED_TEST(test_allreduce_cuda, single_persistent_inplace_managed)
+{
+    TEST_DECLARE( UCC_MEMORY_TYPE_CUDA_MANAGED, TEST_INPLACE, 3, 1);
+}
 #endif
 
 #define TEST_DECLARE_MULTIPLE(_mem_type, _inplace)                             \
@@ -256,6 +277,13 @@ TYPED_TEST(test_allreduce_cuda, multiple) {
 TYPED_TEST(test_allreduce_cuda, multiple_inplace) {
     TEST_DECLARE_MULTIPLE(UCC_MEMORY_TYPE_CUDA, TEST_INPLACE);
 }
+TYPED_TEST(test_allreduce_cuda, multiple_managed) {
+    TEST_DECLARE_MULTIPLE( UCC_MEMORY_TYPE_CUDA_MANAGED, TEST_NO_INPLACE);
+}
+
+TYPED_TEST(test_allreduce_cuda, multiple_inplace_managed) {
+    TEST_DECLARE_MULTIPLE( UCC_MEMORY_TYPE_CUDA_MANAGED, TEST_INPLACE);
+}
 #endif
 
 template<typename T>
@@ -269,8 +297,7 @@ TYPED_TEST(test_allreduce_alg, sra_knomial_pipelined) {
     int           n_procs = 15;
     ucc_job_env_t env     = {{"UCC_CL_BASIC_TUNE", "inf"},
                              {"UCC_TL_UCP_TUNE", "allreduce:@sra_knomial:inf"},
-                             {"UCC_TL_UCP_ALLREDUCE_SRA_KN_FRAG_THRESH", "1024"},
-                             {"UCC_TL_UCP_ALLREDUCE_SRA_KN_N_FRAGS", "11"}};
+                             {"UCC_TL_UCP_ALLREDUCE_SRA_KN_PIPELINE", "thresh=1024:nfrags=11"}};
     UccJob        job(n_procs, UccJob::UCC_JOB_CTX_GLOBAL, env);
     UccTeam_h     team   = job.create_team(n_procs);
     int           repeat = 3;
@@ -278,6 +305,115 @@ TYPED_TEST(test_allreduce_alg, sra_knomial_pipelined) {
     std::vector<ucc_memory_type_t> mt = {UCC_MEMORY_TYPE_HOST};
 
     if (UCC_OK == ucc_mc_available(UCC_MEMORY_TYPE_CUDA)) {
+        mt.push_back(UCC_MEMORY_TYPE_CUDA);
+    }
+    if (UCC_OK == ucc_mc_available( UCC_MEMORY_TYPE_CUDA_MANAGED)) {
+        mt.push_back( UCC_MEMORY_TYPE_CUDA_MANAGED);
+    }
+
+    for (auto count : {65536, 123567}) {
+        for (auto inplace : {TEST_NO_INPLACE, TEST_INPLACE}) {
+            for (auto m : mt) {
+                SET_MEM_TYPE(m);
+                this->set_inplace(inplace);
+                this->data_init(n_procs, TypeParam::dt, count, ctxs, true);
+                UccReq req(team, ctxs);
+
+                for (auto i = 0; i < repeat; i++) {
+                    req.start();
+                    req.wait();
+                    EXPECT_EQ(true, this->data_validate(ctxs));
+                    this->reset(ctxs);
+                }
+                this->data_fini(ctxs);
+            }
+        }
+    }
+}
+
+TYPED_TEST(test_allreduce_alg, dbt) {
+    int           n_procs = 15;
+    ucc_job_env_t env     = {{"UCC_CL_BASIC_TUNE", "inf"},
+                             {"UCC_TL_UCP_TUNE", "allreduce:@dbt:inf"}};
+    UccJob        job(n_procs, UccJob::UCC_JOB_CTX_GLOBAL, env);
+    UccTeam_h     team   = job.create_team(n_procs);
+    int           repeat = 3;
+    UccCollCtxVec ctxs;
+    std::vector<ucc_memory_type_t> mt = {UCC_MEMORY_TYPE_HOST};
+
+    if (UCC_OK == ucc_mc_available(UCC_MEMORY_TYPE_CUDA)) {
+        mt.push_back(UCC_MEMORY_TYPE_CUDA);
+    }
+    if (UCC_OK == ucc_mc_available( UCC_MEMORY_TYPE_CUDA_MANAGED)) {
+        mt.push_back( UCC_MEMORY_TYPE_CUDA_MANAGED);
+    }
+
+    for (auto count : {65536, 123567}) {
+        for (auto inplace : {TEST_NO_INPLACE, TEST_INPLACE}) {
+            for (auto m : mt) {
+                SET_MEM_TYPE(m);
+                this->set_inplace(inplace);
+                this->data_init(n_procs, TypeParam::dt, count, ctxs, true);
+                UccReq req(team, ctxs);
+
+                for (auto i = 0; i < repeat; i++) {
+                    req.start();
+                    req.wait();
+                    EXPECT_EQ(true, this->data_validate(ctxs));
+                    this->reset(ctxs);
+                }
+                this->data_fini(ctxs);
+            }
+        }
+    }
+}
+
+TYPED_TEST(test_allreduce_alg, rab) {
+    int           n_procs = 15;
+    ucc_job_env_t env     = {{"UCC_CL_HIER_TUNE", "allreduce:@rab:0-inf:inf"},
+                             {"UCC_CLS", "all"}};
+    UccJob        job(n_procs, UccJob::UCC_JOB_CTX_GLOBAL, env);
+    UccTeam_h     team   = job.create_team(n_procs);
+    int           repeat = 3;
+    UccCollCtxVec ctxs;
+    std::vector<ucc_memory_type_t> mt = {UCC_MEMORY_TYPE_HOST};
+
+    if (UCC_OK == ucc_mc_available(UCC_MEMORY_TYPE_CUDA)) { //add cuda_managed for cl hier?
+        mt.push_back(UCC_MEMORY_TYPE_CUDA);
+    }
+
+    for (auto count : {8, 65536, 123567}) {
+        for (auto inplace : {TEST_NO_INPLACE, TEST_INPLACE}) {
+            for (auto m : mt) {
+                SET_MEM_TYPE(m);
+                this->set_inplace(inplace);
+                this->data_init(n_procs, TypeParam::dt, count, ctxs, true);
+                UccReq req(team, ctxs);
+
+                for (auto i = 0; i < repeat; i++) {
+                    req.start();
+                    req.wait();
+                    EXPECT_EQ(true, this->data_validate(ctxs));
+                    this->reset(ctxs);
+                }
+                this->data_fini(ctxs);
+            }
+        }
+    }
+}
+
+TYPED_TEST(test_allreduce_alg, rab_pipelined) {
+    int           n_procs = 15;
+    ucc_job_env_t env     = {{"UCC_CL_HIER_TUNE", "allreduce:@rab:0-inf:inf"},
+                             {"UCC_CL_HIER_ALLREDUCE_RAB_PIPELINE", "thresh=1024:nfrags=11"},
+                             {"UCC_CLS", "all"}};
+    UccJob        job(n_procs, UccJob::UCC_JOB_CTX_GLOBAL, env);
+    UccTeam_h     team   = job.create_team(n_procs);
+    int           repeat = 3;
+    UccCollCtxVec ctxs;
+    std::vector<ucc_memory_type_t> mt = {UCC_MEMORY_TYPE_HOST};
+
+    if (UCC_OK == ucc_mc_available(UCC_MEMORY_TYPE_CUDA)) { //add cuda_managed for cl hier?
         mt.push_back(UCC_MEMORY_TYPE_CUDA);
     }
 
@@ -300,6 +436,57 @@ TYPED_TEST(test_allreduce_alg, sra_knomial_pipelined) {
         }
     }
 }
+
+#ifdef HAVE_UCX
+TYPED_TEST(test_allreduce_alg, sliding_window)
+{
+    int              n_procs = 8;
+    ucc_job_env_t    env     = {{"UCC_TL_UCP_TUNE", "allreduce:@sliding_window"},
+                                {"UCC_CLS", "all"}};
+    UccJob           job(n_procs, UccJob::UCC_JOB_CTX_GLOBAL_ONESIDED, env);
+    UccTeam_h        team      = job.create_team(n_procs);
+    int              repeat    = 3;
+    test_ucp_info_t *ucp_infos = NULL;
+    std::vector<ucc_memory_type_t> mt = {UCC_MEMORY_TYPE_HOST};
+    ucs_status_t     ucs_status = UCS_OK;
+    UccCollCtxVec    ctxs;
+
+    if (UCC_OK == ucc_mc_available(
+                      UCC_MEMORY_TYPE_CUDA)) { //add cuda_managed for cl hier?
+        mt.push_back(UCC_MEMORY_TYPE_CUDA);
+    }
+
+    for (auto count : {65536, 123567}) {
+        for (auto inplace : {TEST_NO_INPLACE, TEST_INPLACE}) {
+            for (auto m : mt) {
+                SET_MEM_TYPE(m);
+                this->set_inplace(inplace);
+                this->data_init(n_procs, TypeParam::dt, count, ctxs, true);
+
+                // set args->global_work_buffer on each ctx
+                ucs_status = setup_gwbi(n_procs, ctxs, &ucp_infos, inplace == TEST_INPLACE);
+                if (ucs_status != UCS_OK) {
+                    free_gwbi(n_procs, ctxs, ucp_infos, inplace == TEST_INPLACE);
+                    this->data_fini(ctxs);
+                    if (ucs_status == UCS_ERR_UNSUPPORTED) {
+                        GTEST_SKIP() << "Exported memory key not supported";
+                    } else {
+                        GTEST_FAIL() << ucs_status_string(ucs_status);
+                    }
+                }
+
+                for (auto i = 0; i < repeat; i++) {
+                    this->reset(ctxs);
+                }
+
+                free_gwbi(n_procs, ctxs, ucp_infos, inplace == TEST_INPLACE);
+                ucp_infos = NULL;
+                this->data_fini(ctxs);
+            }
+        }
+    }
+}
+#endif
 
 template <typename T>
 class test_allreduce_avg_order : public test_allreduce<T> {
@@ -325,6 +512,9 @@ TYPED_TEST(test_allreduce_avg_order, avg_post_op)
 
     if (UCC_OK == ucc_mc_available(UCC_MEMORY_TYPE_CUDA)) {
         mt.push_back(UCC_MEMORY_TYPE_CUDA);
+    }
+    if (UCC_OK == ucc_mc_available( UCC_MEMORY_TYPE_CUDA_MANAGED)) {
+        mt.push_back( UCC_MEMORY_TYPE_CUDA_MANAGED);
     }
 
     for (auto count : {4, 256, 65536}) {

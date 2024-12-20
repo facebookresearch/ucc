@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2001-2022, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2001-2024, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # This software product is a proprietary product of Mellanox Technologies Ltd.
 # (the "Company") and all right, title, and interest and to the software product,
 # including all associated intellectual property rights, are and shall
@@ -10,8 +10,9 @@
 # $COPYRIGHT$
 # $HEADER$
 
+AC_PREREQ([2.63])
 define([ucc_ver_major], 1)
-define([ucc_ver_minor], 1)
+define([ucc_ver_minor], 4)
 define([ucc_ver_patch], 0)
 define([ucc_ver_micro], esyscmd([sh -c "git rev-list HEAD | wc -l | sed -e 's/ *//g' | xargs -n1 printf"]))
 define([ucc_git_sha], esyscmd([sh -c "git rev-parse --short HEAD"]))
@@ -25,10 +26,15 @@ AC_INIT([ucc], [ucc_ver_major.ucc_ver_minor])
 : ${CPPFLAGS=""}
 : ${CFLAGS=""}
 : ${CXXFLAGS=""}
+config_flags="$*"
 
 AC_USE_SYSTEM_EXTENSIONS
-AC_GNU_SOURCE
 AC_CONFIG_HEADERS([config.h])
+
+#
+# Save config flags for version dump tool
+#
+AC_DEFINE_UNQUOTED([UCC_CONFIGURE_FLAGS], ["$config_flags"], [UCC configure flags])
 
 UCC_TOP_BUILDDIR="`pwd`"
 AC_SUBST(UCC_TOP_BUILDDIR)
@@ -73,8 +79,7 @@ AM_PROG_AS
 AC_PROG_LN_S
 AC_PROG_MKDIR_P
 AC_PROG_INSTALL
-AC_PROG_LIBTOOL
-AC_HEADER_STDC
+LT_INIT
 CFLAGS="$CFLAGS_save"
 
 AC_CHECK_SIZEOF(float)
@@ -155,7 +160,9 @@ AS_IF([test "x$with_docs_only" = xyes],
      AM_CONDITIONAL([HAVE_MPICXX], [false])
      AM_CONDITIONAL([HAVE_PROFILING],[false])
      AM_CONDITIONAL([HAVE_IBVERBS],[false])
+     AM_CONDITIONAL([HAVE_RDMACM],[false])
      AM_CONDITIONAL([HAVE_MLX5DV],[false])
+     AM_CONDITIONAL([HAVE_DOCA_UROM], [false])
     ],
     [
      AM_CONDITIONAL([DOCS_ONLY], [false])
@@ -166,10 +173,12 @@ AS_IF([test "x$with_docs_only" = xyes],
      m4_include([config/m4/cuda.m4])
      m4_include([config/m4/nccl.m4])
      m4_include([config/m4/rocm.m4])
+     m4_include([config/m4/doca_urom.m4])
      m4_include([config/m4/rccl.m4])
      m4_include([config/m4/sharp.m4])
      m4_include([config/m4/mpi.m4])
      m4_include([config/m4/ibverbs.m4])
+     m4_include([config/m4/rdmacm.m4])
      m4_include([config/m4/configure.m4])
      m4_include([config/m4/tl_coll_plugins.m4])
      m4_include([config/m4/check_tls.m4])
@@ -198,11 +207,17 @@ AS_IF([test "x$with_docs_only" = xyes],
          mc_modules="${mc_modules}:rocm"
      fi
 
+     CHECK_DOCA_UROM
+     AC_MSG_RESULT([DOCA_UROM support: $doca_urom_happy])
+
      CHECK_GTEST
      AC_MSG_RESULT([GTEST support: $gtest_happy])
 
      CHECK_IBVERBS
      AC_MSG_RESULT([IBVERBS support: $ibverbs_happy, MLX5DV support: $mlx5dv_happy])
+
+     CHECK_RDMACM
+     AC_MSG_RESULT([RDMACM support: $rdmacm_happy])
      ]) # Docs only
 
 
@@ -214,11 +229,14 @@ LDFLAGS="$LDFLAGS $UCS_LDFLAGS $UCS_LIBADD"
 CHECK_TL_COLL_PLUGINS
 AC_CONFIG_FILES([
                  Makefile
+                 contrib/Makefile
+                 contrib/doca_urom_ucc_plugin/Makefile
                  src/Makefile
                  src/ucc/api/ucc_version.h
                  src/core/ucc_version.c
                  src/components/cl/basic/Makefile
                  src/components/cl/hier/Makefile
+                 src/components/cl/doca_urom/Makefile
                  src/components/mc/cpu/Makefile
                  src/components/mc/cuda/Makefile
                  src/components/ec/cpu/Makefile
@@ -235,6 +253,7 @@ AC_CONFIG_FILES([
                  cmake/ucc-config-version.cmake
                  cmake/ucc-config.cmake
                  cmake/ucc-targets.cmake
+                 ucc.pc
                  ])
 AC_OUTPUT
 
@@ -254,6 +273,10 @@ AC_MSG_NOTICE([        C compiler:   ${CC} ${CFLAGS} ${BASE_CFLAGS}])
 AC_MSG_NOTICE([      C++ compiler:   ${CXX} ${CXXFLAGS} ${BASE_CXXFLAGS}])
 AS_IF([test "x$cuda_happy" = "xyes"],[
 AC_MSG_NOTICE([     NVCC gencodes:   ${NVCC_ARCH}])
+])
+AC_MSG_NOTICE([ DOCA UROM enabled:   ${doca_urom_happy}])
+AS_IF([test "x$rocm_happy" = xyes],[
+AC_MSG_NOTICE([ROCM architectures:   ${ROCM_ARCH}])
 ])
 AC_MSG_NOTICE([          Perftest:   ${mpi_enable}])
 AC_MSG_NOTICE([             Gtest:   ${gtest_enable}])

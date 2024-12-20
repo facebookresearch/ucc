@@ -41,13 +41,11 @@ DOCKER_RUN_ARGS="\
 --cap-add=SYS_ADMIN \
 --device=/dev/infiniband/ \
 --gpus all \
---user root \
 -it \
 -d \
 --rm \
 --name=${DOCKER_CONTAINER_NAME} \
--v /labhome:/labhome \
--v /root/.ssh:/root/.ssh \
+-v /labhome/swx-jenkins:/labhome/swx-jenkins \
 "
 
 # shellcheck disable=SC2013
@@ -58,7 +56,7 @@ for HOST in $(cat "$HOSTFILE"); do
     if [ -n "${STALE_DOCKER_CONTAINER_LIST}" ]; then
         echo "WARNING: stale docker container (name: ${DOCKER_CONTAINER_NAME}) is detected on ${HOST} (to be stopped)"
         echo "INFO: Stopping stale docker container (name: ${DOCKER_CONTAINER_NAME}) on ${HOST}..."
-        ssh "${HOST}" docker stop ${DOCKER_CONTAINER_NAME}
+        ssh "${HOST}" docker stop "$STALE_DOCKER_CONTAINER_LIST"
         echo "INFO: Stopping stale docker container (name: ${DOCKER_CONTAINER_NAME}) on ${HOST}... DONE"
     fi
 done
@@ -78,16 +76,16 @@ pdsh -w "${HOST_LIST}" -R ssh docker pull "${DOCKER_IMAGE_NAME}"
 for HOST in $(cat "$HOSTFILE"); do
     echo "INFO: start docker container on $HOST ..."
     # shellcheck disable=SC2029
-    sudo ssh "$HOST" "docker run \
+    ssh "$HOST" "docker run \
         ${DOCKER_RUN_ARGS} \
         ${DOCKER_IMAGE_NAME} \
-        bash -c '/usr/sbin/sshd -p ${DOCKER_SSH_PORT}; sleep infinity'"
+        sudo /usr/sbin/sshd -D -p ${DOCKER_SSH_PORT}"
     echo "INFO: start docker container on $HOST ... DONE"
 
     sleep 5
 
     echo "INFO: verify docker container on $HOST ..."
-    sudo ssh -p "${DOCKER_SSH_PORT}" "$HOST" hostname
-    sudo ssh -p "${DOCKER_SSH_PORT}" "$HOST" cat /proc/1/cgroup
+    ssh -p "${DOCKER_SSH_PORT}" "$HOST" hostname
+    ssh -p "${DOCKER_SSH_PORT}" "$HOST" cat /proc/1/cgroup
     echo "INFO: verify docker container on $HOST ... DONE"
 done

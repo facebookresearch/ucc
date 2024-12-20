@@ -1,8 +1,9 @@
 /**
- * Copyright (c) 2021-2022, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2021-2024, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  *
  * See file LICENSE for terms.
  */
+
 #include "ucc_coll_score.h"
 #include "utils/ucc_coll_utils.h"
 #include "utils/ucc_string.h"
@@ -73,10 +74,9 @@ void ucc_coll_score_free_map(ucc_score_map_t *map)
     ucc_free(map);
 }
 
-static
-ucc_status_t ucc_coll_score_map_lookup(ucc_score_map_t      *map,
-                                       ucc_base_coll_args_t *bargs,
-                                       ucc_msg_range_t     **range)
+static ucc_status_t ucc_coll_score_map_lookup(ucc_score_map_t *map,
+                                              ucc_base_coll_args_t *bargs,
+                                              ucc_msg_range_t **range)
 {
     ucc_memory_type_t mt      = ucc_coll_args_mem_type(&bargs->args,
                                                        map->team_rank);
@@ -84,18 +84,16 @@ ucc_status_t ucc_coll_score_map_lookup(ucc_score_map_t      *map,
     size_t            msgsize = ucc_coll_args_msgsize(&bargs->args,
                                                       map->team_rank,
                                                       map->team_size);
-    ucc_list_link_t  *list;
-    ucc_msg_range_t  *r;
+    ucc_list_link_t *list;
+    ucc_msg_range_t *r;
 
-    if (mt == UCC_MEMORY_TYPE_ASSYMETRIC) {
-        /* TODO */
-        return UCC_ERR_NOT_SUPPORTED;
-    } else if (mt == UCC_MEMORY_TYPE_NOT_APPLY) {
+    if (mt == UCC_MEMORY_TYPE_NOT_APPLY) {
         /* Temporary solution: for Barrier, Fanin, Fanout - use
            "host" range list */
         mt = UCC_MEMORY_TYPE_HOST;
     }
-    if (msgsize == UCC_MSG_SIZE_INVALID || msgsize == UCC_MSG_SIZE_ASSYMETRIC) {
+    ucc_assert(ucc_coll_args_is_mem_symmetric(&bargs->args, map->team_rank));
+    if (msgsize == UCC_MSG_SIZE_INVALID || msgsize == UCC_MSG_SIZE_ASYMMETRIC) {
         /* These algorithms require global communication to get the same msgsize estimation.
            Can't use msg ranges. Use msize 0 (assuming the range list should only contain 1
            range [0:inf]) */
@@ -121,7 +119,9 @@ ucc_status_t ucc_coll_init(ucc_score_map_t      *map,
     ucc_status_t      status;
 
     status = ucc_coll_score_map_lookup(map, bargs, &r);
-    if (UCC_OK != status) {
+    if (ucc_unlikely(UCC_OK != status)) {
+        ucc_debug("coll_score_map lookup failed %d (%s)",
+                   status, ucc_status_string(status));
         return status;
     }
 
@@ -159,11 +159,12 @@ ucc_status_t ucc_coll_init(ucc_score_map_t      *map,
 
 void ucc_coll_score_map_print_info(const ucc_score_map_t *map)
 {
-    size_t            left;
-    ucc_msg_range_t  *range;
-    int               i, j, all_empty;
-    char              range_str[128];
-    char              coll_str[1024];
+    size_t           left;
+    ucc_msg_range_t *range;
+    int              i, j, all_empty;
+    char             score_str[32];
+    char             range_str[128];
+    char             coll_str[1024];
 
     for (i = 0; i < UCC_COLL_TYPE_NUM; i++) {
         all_empty = 1;
@@ -179,7 +180,7 @@ void ucc_coll_score_map_print_info(const ucc_score_map_t *map)
         coll_str[0] = '\0';
         left        = sizeof(coll_str);
         STR_APPEND(coll_str, left, 32, "%s:\n",
-                   ucc_coll_type_str(UCC_BIT(i)));
+                   ucc_coll_type_str((ucc_coll_type_t)UCC_BIT(i)));
         for (j = 0; j < UCC_MEMORY_TYPE_LAST; j++) {
             if (ucc_list_is_empty(&map->score->scores[i][j])) {
                 continue;
@@ -190,10 +191,12 @@ void ucc_coll_score_map_print_info(const ucc_score_map_t *map)
                               super.list_elem) {
                 ucc_memunits_range_str(range->start, range->end, range_str,
                                        sizeof(range_str));
-                STR_APPEND(coll_str, left, 256, "{%s}:%s:%u ",
+                ucc_score_to_str(range->super.score, score_str,
+                                 sizeof(score_str));
+                STR_APPEND(coll_str, left, 256, "{%s}:%s:%s ",
                            range_str,
                            range->super.team->context->lib->log_component.name,
-                           range->super.score);
+                           score_str);
             }
             STR_APPEND(coll_str, left, 4, "\n");
         }

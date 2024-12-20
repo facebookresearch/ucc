@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2021, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2021-2024, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * Copyright (c) Facebook, Inc. and its affiliates. 2021.
  * Copyright (C) Advanced Micro Devices, Inc. 2022. ALL RIGHTS RESERVED.
  *
@@ -38,12 +38,18 @@ void ucc_tl_rccl_driver_collective_progress(ucc_coll_task_t *coll_task)
 #endif
 }
 
-static void ucc_tl_rccl_req_mpool_obj_init(ucc_mpool_t *mp, void *obj,
-                                           void *chunk)
+static void ucc_tl_rccl_req_mpool_obj_init(ucc_mpool_t *mp, void *obj, //NOLINT: mp is unused
+                                           void *chunk) //NOLINT: chunk is unused
 {
     ucc_tl_rccl_task_t *req = (ucc_tl_rccl_task_t*) obj;
 
+    ucc_coll_task_construct(&req->super);
     req->super.progress = ucc_tl_rccl_event_collective_progress;
+}
+
+static void ucc_tl_rccl_req_mpool_obj_cleanup(ucc_mpool_t *mp, void *obj) //NOLINT: mp is unused
+{
+    ucc_coll_task_destruct(obj);
 }
 
 
@@ -51,7 +57,7 @@ static ucc_mpool_ops_t ucc_tl_rccl_req_mpool_ops = {
     .chunk_alloc   = ucc_mpool_hugetlb_malloc,
     .chunk_release = ucc_mpool_hugetlb_free,
     .obj_init      = ucc_tl_rccl_req_mpool_obj_init,
-    .obj_cleanup   = NULL
+    .obj_cleanup   = ucc_tl_rccl_req_mpool_obj_cleanup
 };
 
 UCC_CLASS_INIT_FUNC(ucc_tl_rccl_context_t,
@@ -73,12 +79,12 @@ UCC_CLASS_INIT_FUNC(ucc_tl_rccl_context_t,
     }
 
     if (self->cfg.sync_type != UCC_TL_RCCL_COMPLETION_SYNC_TYPE_EVENT) {
-        tl_info(self->super.super.lib, "fallback to event completion sync");
+        tl_debug(self->super.super.lib, "fallback to event completion sync");
         self->cfg.sync_type = UCC_TL_RCCL_COMPLETION_SYNC_TYPE_EVENT;
     }
 
     ucc_assert(self->cfg.sync_type == UCC_TL_RCCL_COMPLETION_SYNC_TYPE_EVENT);
-    tl_info(self->super.super.lib, "using event completion sync");
+    tl_debug(self->super.super.lib, "using event completion sync");
     status = ucc_mpool_init(&self->req_mp, 0, sizeof(ucc_tl_rccl_task_t), 0,
                             UCC_CACHE_LINE_SIZE, 8, UINT_MAX,
                             &ucc_tl_rccl_req_mpool_ops, params->thread_mode,
@@ -93,13 +99,13 @@ UCC_CLASS_INIT_FUNC(ucc_tl_rccl_context_t,
     if (hip_st != hipSuccess) {
         return UCC_ERR_NO_MEMORY;
     }
-    tl_info(self->super.super.lib, "initialized tl context: %p", self);
+    tl_debug(self->super.super.lib, "initialized tl context: %p", self);
     return UCC_OK;
 }
 
 UCC_CLASS_CLEANUP_FUNC(ucc_tl_rccl_context_t)
 {
-    tl_info(self->super.super.lib, "finalizing tl context: %p", self);
+    tl_debug(self->super.super.lib, "finalizing tl context: %p", self);
     ucc_mpool_cleanup(&self->req_mp, 1);
     hipFree(self->scratch_buf);
     self->scratch_buf = NULL;
@@ -111,9 +117,6 @@ ucc_status_t
 ucc_tl_rccl_get_context_attr(const ucc_base_context_t *context, /* NOLINT */
                              ucc_base_ctx_attr_t      *attr)
 {
-    if (attr->attr.mask & UCC_CONTEXT_ATTR_FIELD_CTX_ADDR_LEN) {
-        attr->attr.ctx_addr_len = 0;
-    }
-    attr->topo_required = 0;
+    ucc_base_ctx_attr_clear(attr);
     return UCC_OK;
 }

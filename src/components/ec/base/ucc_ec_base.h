@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2022, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2022-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  *
  * See file LICENSE for terms.
  */
@@ -44,9 +44,6 @@ typedef struct ucc_ec_attr {
 } ucc_ec_attr_t;
 
 typedef struct ucc_ec_ops {
-    ucc_status_t (*task_post)(void *ee_context, void **ee_req);
-    ucc_status_t (*task_query)(void *ee_req);
-    ucc_status_t (*task_end)(void *ee_req);
     ucc_status_t (*create_event)(void **event);
     ucc_status_t (*destroy_event)(void *event);
     ucc_status_t (*event_post)(void *ee_context, void *event);
@@ -59,23 +56,30 @@ typedef struct ucc_ee_executor {
 } ucc_ee_executor_t;
 
 enum ucc_ee_executor_params_field {
-    UCC_EE_EXECUTOR_PARAM_FIELD_TYPE    = UCC_BIT(0),
+    UCC_EE_EXECUTOR_PARAM_FIELD_TYPE       = UCC_BIT(0),
+    UCC_EE_EXECUTOR_PARAM_FIELD_TASK_TYPES = UCC_BIT(1),
 };
 
 typedef enum ucc_ee_executor_task_type {
-    UCC_EE_EXECUTOR_TASK_REDUCE         = UCC_BIT(0),
-    UCC_EE_EXECUTOR_TASK_REDUCE_STRIDED = UCC_BIT(1),
-    UCC_EE_EXECUTOR_TASK_COPY           = UCC_BIT(2),
-    UCC_EE_EXECUTOR_TASK_COPY_MULTI     = UCC_BIT(3)
+    UCC_EE_EXECUTOR_TASK_REDUCE           = UCC_BIT(0),
+    UCC_EE_EXECUTOR_TASK_REDUCE_STRIDED   = UCC_BIT(1),
+    UCC_EE_EXECUTOR_TASK_REDUCE_MULTI_DST = UCC_BIT(2),
+    UCC_EE_EXECUTOR_TASK_COPY             = UCC_BIT(3),
+    UCC_EE_EXECUTOR_TASK_COPY_MULTI       = UCC_BIT(4),
+    UCC_EE_EXECUTOR_TASK_LAST
 } ucc_ee_executor_task_type_t;
 
 typedef struct ucc_ee_executor_params {
     uint64_t        mask;
     ucc_ee_type_t   ee_type;
+    uint64_t        task_types;
 } ucc_ee_executor_params_t;
 
 #define UCC_EE_EXECUTOR_NUM_BUFS 9
-#define UCC_EE_EXECUTOR_NUM_COPY_BUFS 6
+
+/* Maximum number of buffers for UCC_EE_EXECUTOR_TASK_REDUCE_MULTI_DST and
+   UCC_EE_EXECUTOR_TASK_COPY_MULTI operations */
+#define UCC_EE_EXECUTOR_MULTI_OP_NUM_BUFS 7
 
 /* Reduces "n_srcs" buffers (each contains "count" elements of type "dt")
    into "dst" buffer.
@@ -103,6 +107,18 @@ typedef struct ucc_eee_task_reduce {
     ucc_reduction_op_t op;
     uint16_t n_srcs;
 } ucc_eee_task_reduce_t;
+
+/* Performs "n_bufs" independent reductions for corresponding buffers in src1 and
+   src2 and saving result into "dst" buffer */
+typedef struct ucc_eee_task_reduce_multi_dst {
+    void               *dst[UCC_EE_EXECUTOR_MULTI_OP_NUM_BUFS];
+    void               *src1[UCC_EE_EXECUTOR_MULTI_OP_NUM_BUFS];
+    void               *src2[UCC_EE_EXECUTOR_MULTI_OP_NUM_BUFS];
+    size_t              counts[UCC_EE_EXECUTOR_MULTI_OP_NUM_BUFS];
+    ucc_datatype_t      dt;
+    ucc_reduction_op_t  op;
+    uint16_t            n_bufs;
+}  ucc_eee_task_reduce_multi_dst_t;
 
 /* Reduces "n_srcs2+1" buffers (each contains "count" elements of type "dt")
    into "dst" buffer. The first source buffer is "src1". Other n_src2 source
@@ -138,9 +154,9 @@ enum ucc_eee_task_flags {
 
 /* Performs "num_vectors" copies from SRC[i] to DST[i] */
 typedef struct ucc_eee_task_copy_multi{
-    void   *src[UCC_EE_EXECUTOR_NUM_COPY_BUFS];
-    void   *dst[UCC_EE_EXECUTOR_NUM_COPY_BUFS];
-    size_t  counts[UCC_EE_EXECUTOR_NUM_COPY_BUFS];
+    void   *src[UCC_EE_EXECUTOR_MULTI_OP_NUM_BUFS];
+    void   *dst[UCC_EE_EXECUTOR_MULTI_OP_NUM_BUFS];
+    size_t  counts[UCC_EE_EXECUTOR_MULTI_OP_NUM_BUFS];
     size_t  num_vectors;
 } ucc_eee_task_copy_multi_t;
 
@@ -148,10 +164,11 @@ typedef struct ucc_ee_executor_task_args {
     uint16_t                     task_type;
     uint16_t                     flags;
     union {
-        ucc_eee_task_reduce_t         reduce;
-        ucc_eee_task_reduce_strided_t reduce_strided;
-        ucc_eee_task_copy_t           copy;
-        ucc_eee_task_copy_multi_t     copy_multi;
+        ucc_eee_task_reduce_t           reduce;
+        ucc_eee_task_reduce_strided_t   reduce_strided;
+        ucc_eee_task_reduce_multi_dst_t reduce_multi_dst;
+        ucc_eee_task_copy_t             copy;
+        ucc_eee_task_copy_multi_t       copy_multi;
     };
 } ucc_ee_executor_task_args_t;
 

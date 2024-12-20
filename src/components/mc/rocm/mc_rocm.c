@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2020-2021, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2020-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * Copyright (C) Advanced Micro Devices, Inc. 2022. ALL RIGHTS RESERVED.
  *
  * See file LICENSE for terms.
@@ -9,6 +9,7 @@
 #include "utils/ucc_malloc.h"
 #include "utils/arch/cpu.h"
 #include <hip/hip_runtime.h>
+#include <hip/hip_version.h>
 #include <hsa/hsa.h>
 #include <hsa/hsa_ext_amd.h>
 
@@ -40,7 +41,7 @@ static ucc_status_t ucc_mc_rocm_init(const ucc_mc_params_t *mc_params)
     ucc_mc_rocm.thread_mode = mc_params->thread_mode;
     rocm_st = hipGetDeviceCount(&num_devices);
     if ((rocm_st != hipSuccess) || (num_devices == 0)) {
-        mc_info(&ucc_mc_rocm.super, "rocm devices are not found");
+        mc_debug(&ucc_mc_rocm.super, "rocm devices are not found");
         return hip_error_to_ucc_status(rocm_st);
     }
 
@@ -60,7 +61,8 @@ static ucc_status_t ucc_mc_rocm_get_attr(ucc_mc_attr_t *mc_attr)
 }
 
 static ucc_status_t ucc_mc_rocm_mem_alloc(ucc_mc_buffer_header_t **h_ptr,
-                                          size_t                   size)
+                                          size_t                   size,
+                                          ucc_memory_type_t        mt)
 {
     hipError_t st;
 
@@ -80,14 +82,15 @@ static ucc_status_t ucc_mc_rocm_mem_alloc(ucc_mc_buffer_header_t **h_ptr,
         return hip_error_to_ucc_status(st);
     }
     h->from_pool = 0;
-    h->mt        = UCC_MEMORY_TYPE_ROCM;
+    h->mt        = mt;
     *h_ptr       = h;
     mc_trace(&ucc_mc_rocm.super, "allocated %ld bytes with hipMalloc", size);
     return UCC_OK;
 }
 
 static ucc_status_t ucc_mc_rocm_mem_pool_alloc(ucc_mc_buffer_header_t **h_ptr,
-                                               size_t                   size)
+                                               size_t                   size,
+                                               ucc_memory_type_t        mt)
 {
     ucc_mc_buffer_header_t *h = NULL;
 
@@ -96,7 +99,7 @@ static ucc_status_t ucc_mc_rocm_mem_pool_alloc(ucc_mc_buffer_header_t **h_ptr,
     }
     if (!h) {
         // Slow path
-        return ucc_mc_rocm_mem_alloc(h_ptr, size);
+        return ucc_mc_rocm_mem_alloc(h_ptr, size, mt);
     }
     if (ucc_unlikely(!h->addr)){
         return UCC_ERR_NO_MEMORY;
@@ -106,7 +109,7 @@ static ucc_status_t ucc_mc_rocm_mem_pool_alloc(ucc_mc_buffer_header_t **h_ptr,
     return UCC_OK;
 }
 
-static ucc_status_t ucc_mc_rocm_chunk_alloc(ucc_mpool_t *mp,
+static ucc_status_t ucc_mc_rocm_chunk_alloc(ucc_mpool_t *mp, //NOLINT
                                             size_t *size_p,
                                             void **chunk_p)
 {
@@ -119,8 +122,8 @@ static ucc_status_t ucc_mc_rocm_chunk_alloc(ucc_mpool_t *mp,
     return UCC_OK;
 }
 
-static void ucc_mc_rocm_chunk_init(ucc_mpool_t *mp,
-                                   void *obj, void *chunk)
+static void ucc_mc_rocm_chunk_init(ucc_mpool_t *mp, //NOLINT
+                                   void *obj, void *chunk) //NOLINT
 {
     ucc_mc_buffer_header_t *h = (ucc_mc_buffer_header_t *)obj;
     hipError_t st             = hipMalloc(&h->addr, MC_ROCM_CONFIG->mpool_elem_size);
@@ -138,12 +141,12 @@ static void ucc_mc_rocm_chunk_init(ucc_mpool_t *mp,
     h->mt        = UCC_MEMORY_TYPE_ROCM;
 }
 
-static void ucc_mc_rocm_chunk_release(ucc_mpool_t *mp, void *chunk)
+static void ucc_mc_rocm_chunk_release(ucc_mpool_t *mp, void *chunk) //NOLINT: mp is unused
 {
     ucc_free(chunk);
 }
 
-static void ucc_mc_rocm_chunk_cleanup(ucc_mpool_t *mp, void *obj)
+static void ucc_mc_rocm_chunk_cleanup(ucc_mpool_t *mp, void *obj) //NOLINT: mp is unused
 {
     ucc_mc_buffer_header_t *h = (ucc_mc_buffer_header_t *)obj;
     hipError_t st;
@@ -191,7 +194,8 @@ static ucc_status_t ucc_mc_rocm_mem_pool_free(ucc_mc_buffer_header_t *h_ptr)
 
 static ucc_status_t
 ucc_mc_rocm_mem_pool_alloc_with_init(ucc_mc_buffer_header_t **h_ptr,
-                                     size_t                   size)
+                                     size_t                   size,
+                                     ucc_memory_type_t        mt)
 {
     // lock assures single mpool initiation when multiple threads concurrently execute
     // different collective operations thus concurrently entering init function.
@@ -201,7 +205,7 @@ ucc_mc_rocm_mem_pool_alloc_with_init(ucc_mc_buffer_header_t **h_ptr,
         ucc_mc_rocm.super.ops.mem_alloc = ucc_mc_rocm_mem_alloc;
         ucc_mc_rocm.super.ops.mem_free  = ucc_mc_rocm_mem_free;
         ucc_spin_unlock(&ucc_mc_rocm.init_spinlock);
-        return ucc_mc_rocm_mem_alloc(h_ptr, size);
+        return ucc_mc_rocm_mem_alloc(h_ptr, size, mt);
     }
 
     if (!ucc_mc_rocm.mpool_init_flag) {
@@ -217,7 +221,7 @@ ucc_mc_rocm_mem_pool_alloc_with_init(ucc_mc_buffer_header_t **h_ptr,
         ucc_mc_rocm.mpool_init_flag     = 1;
     }
     ucc_spin_unlock(&ucc_mc_rocm.init_spinlock);
-    return ucc_mc_rocm_mem_pool_alloc(h_ptr, size);
+    return ucc_mc_rocm_mem_pool_alloc(h_ptr, size, mt);
 }
 
 static ucc_status_t ucc_mc_rocm_memcpy(void *dst, const void *src, size_t len,
@@ -237,6 +241,32 @@ static ucc_status_t ucc_mc_rocm_memcpy(void *dst, const void *src, size_t len,
                  "failed to launch hipMemcpyAsync,  dst %p, src %p, len %zd "
                  "hip error %d(%s)",
                  dst, src, len, st, hipGetErrorString(st));
+        return hip_error_to_ucc_status(st);
+    }
+    st = hipStreamSynchronize(ucc_mc_rocm.stream);
+    if (ucc_unlikely(st != hipSuccess)) {
+        hipGetLastError();
+        mc_error(&ucc_mc_rocm.super,
+                 "failed to synchronize mc_rocm.stream "
+                 "hip error %d(%s)",
+                 st, hipGetErrorString(st));
+        return hip_error_to_ucc_status(st);
+    }
+    return UCC_OK;
+}
+
+static ucc_status_t ucc_mc_rocm_memset(void *ptr, int val, size_t len)
+{
+    hipError_t st;
+
+    UCC_MC_ROCM_INIT_STREAM();
+    st = hipMemsetAsync(ptr, val, len, ucc_mc_rocm.stream);
+    if (ucc_unlikely(st != hipSuccess)) {
+        hipGetLastError();
+        mc_error(&ucc_mc_rocm.super,
+                 "failed to launch hipMemsetAsync, dst %p, len %zd "
+                 "hip error %d(%s)",
+                 ptr, len, st, hipGetErrorString(st));
         return hip_error_to_ucc_status(st);
     }
     st = hipStreamSynchronize(ucc_mc_rocm.stream);
@@ -272,13 +302,23 @@ static ucc_status_t ucc_mc_rocm_mem_query(const void *ptr,
             hipGetLastError();
             return UCC_ERR_NOT_SUPPORTED;
         }
+
+#if HIP_VERSION >= 50500000
+        switch (attr.type) {
+#else
         switch (attr.memoryType) {
+#endif
         case hipMemoryTypeHost:
             mem_type = (attr.isManaged ? UCC_MEMORY_TYPE_ROCM_MANAGED : UCC_MEMORY_TYPE_HOST);
             break;
         case hipMemoryTypeDevice:
             mem_type = UCC_MEMORY_TYPE_ROCM;
             break;
+#if HIP_VERSION >= 50300000
+        case hipMemoryTypeManaged:
+            mem_type = UCC_MEMORY_TYPE_ROCM_MANAGED;
+            break;
+#endif
         default:
             return UCC_ERR_NOT_SUPPORTED;
         }
@@ -330,6 +370,7 @@ ucc_mc_rocm_t ucc_mc_rocm = {
     .super.ops.mem_alloc          = ucc_mc_rocm_mem_pool_alloc_with_init,
     .super.ops.mem_free           = ucc_mc_rocm_mem_pool_free,
     .super.ops.memcpy             = ucc_mc_rocm_memcpy,
+    .super.ops.memset             = ucc_mc_rocm_memset,
     .super.config_table =
         {
             .name   = "ROCM memory component",

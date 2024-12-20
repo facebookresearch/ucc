@@ -1,5 +1,6 @@
 /**
- * Copyright (c) 2021, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2021-2024, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *
  * See file LICENSE for terms.
  */
 
@@ -40,7 +41,7 @@ ucc_service_coll_req_init(ucc_team_t *team, ucc_subset_t *subset,
         subset->map.cb.cb     = ucc_service_coll_map_cb;
         subset->map.cb.cb_ctx = req;
     } else {
-        ucc_assert(team->service_team);
+        ucc_assert(team->service_team != NULL);
         *service_team = team->service_team;
     }
 
@@ -142,7 +143,7 @@ ucc_status_t ucc_service_coll_finalize(ucc_service_coll_req_t *req)
 {
     ucc_status_t status;
 
-    status = ucc_collective_finalize(&req->task->super);
+    status = ucc_collective_finalize_internal(req->task);
     ucc_free(req);
     return status;
 }

@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2021, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2021-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * Copyright (c) Facebook, Inc. and its affiliates. 2021.
  *
  * See file LICENSE for terms.
@@ -10,6 +10,7 @@
 
 #include "tl_nccl.h"
 
+#define UCC_TL_NCCL_DT_FOR_UNSUPPORTED       UCC_DT_INT8
 #define UCC_TL_NCCL_N_DEFAULT_ALG_SELECT_STR 1
 extern const char
     *ucc_tl_nccl_default_alg_select_str[UCC_TL_NCCL_N_DEFAULT_ALG_SELECT_STR];
@@ -19,8 +20,9 @@ ucc_status_t ucc_tl_nccl_alg_id_to_init(int alg_id, const char *alg_id_str,
                                         ucc_memory_type_t mem_type,
                                         ucc_base_coll_init_fn_t *init);
 
-ucc_tl_nccl_task_t * ucc_tl_nccl_init_task(ucc_base_coll_args_t *coll_args,
-                                           ucc_base_team_t *team);
+ucc_status_t ucc_tl_nccl_init_task(ucc_base_coll_args_t *coll_args,
+                                   ucc_base_team_t *team,
+                                   ucc_tl_nccl_task_t **coll_task);
 
 void ucc_tl_nccl_free_task(ucc_tl_nccl_task_t *task);
 

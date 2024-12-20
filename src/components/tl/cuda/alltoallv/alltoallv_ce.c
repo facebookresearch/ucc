@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2021-2022, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2021-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * Copyright (c) Meta Platforms, Inc. and affiliates. 2022.
  *
  * See file LICENSE for terms.
@@ -146,9 +146,10 @@ exit_err:
 
 ucc_status_t ucc_tl_cuda_alltoallv_ce_post_copies(ucc_tl_cuda_task_t *task)
 {
-    ucc_tl_cuda_team_t         *team = TASK_TEAM(task);
-    ucc_rank_t                  rank = UCC_TL_TEAM_RANK(team);
-    ucc_tl_cuda_sync_t         *sync = TASK_SYNC(task, rank);
+    ucc_tl_cuda_team_t         *team      = TASK_TEAM(task);
+    ucc_rank_t                  rank      = UCC_TL_TEAM_RANK(team);
+    ucc_tl_cuda_sync_t         *sync      = TASK_SYNC(task, rank);
+    ucc_ee_executor_task_args_t exec_args = {0};
     ucc_tl_cuda_sync_t         *peer_sync;
     ucc_ee_executor_t          *exec;
     void                       *src, *dst;
@@ -156,7 +157,6 @@ ucc_status_t ucc_tl_cuda_alltoallv_ce_post_copies(ucc_tl_cuda_task_t *task)
     size_t                      data_size, data_displ;
     ucc_rank_t                  i, peer, psrc, pdst;
     ucc_status_t                status;
-    ucc_ee_executor_task_args_t exec_args;
 
     task->alltoallv_ce.num_posted = 0;
     status = ucc_coll_task_get_executor(&task->super, &exec);
@@ -238,6 +238,47 @@ exit:
     return status;
 }
 
+ucc_status_t ucc_tl_cuda_alltoallv_unmap(ucc_tl_cuda_task_t *task)
+{
+    ucc_tl_cuda_team_t *team = TASK_TEAM(task);
+    ucc_rank_t                   i, dst;
+    volatile ucc_tl_cuda_sync_t *peer_sync;
+    ucc_tl_cuda_cache_t         *cache;
+    ucc_status_t                 status;
+
+    for (i = 0; i < UCC_TL_TEAM_SIZE(team); i++) {
+        if (i == UCC_TL_TEAM_RANK(team) ||
+            !ucc_tl_cuda_team_topo_is_direct(&team->super, team->topo,
+                                            UCC_TL_TEAM_RANK(team), i)) {
+            continue;
+        }
+        peer_sync = TASK_SYNC(task, i);
+        cache     = ucc_tl_cuda_get_cache(team, i);
+
+        status = ucc_tl_cuda_unmap_memhandle(
+            (uintptr_t)peer_sync->mem_info_src.ptr,
+            task->alltoallv_ce.peer_map_addr_src[i], cache, 0);
+        if (ucc_unlikely(status != UCC_OK)) {
+            return status;
+        }
+    }
+
+    for (i = 0; i < team->topo->num_proxies; i++) {
+        dst = team->topo->proxies[i].dst;
+        peer_sync = TASK_SYNC(task, dst);
+        cache = ucc_tl_cuda_get_cache(team, dst);
+
+        status = ucc_tl_cuda_unmap_memhandle(
+            (uintptr_t)peer_sync->mem_info_dst.ptr,
+            task->alltoallv_ce.peer_map_addr_dst[dst], cache, 0);
+        if (ucc_unlikely(status != UCC_OK)) {
+            return status;
+        }
+    }
+
+    return UCC_OK;
+}
+
 void ucc_tl_cuda_alltoallv_ce_progress(ucc_coll_task_t *coll_task)
 {
     ucc_tl_cuda_task_t *task = ucc_derived_of(coll_task, ucc_tl_cuda_task_t);
@@ -301,11 +342,14 @@ void ucc_tl_cuda_alltoallv_ce_progress(ucc_coll_task_t *coll_task)
         ucc_assert(task->alltoallv_ce.stage == ALLTOALL_CE_STAGE_BAR);
         break;
     }
-    task->super.status =
-        ucc_tl_cuda_shm_barrier_test(UCC_TL_TEAM_RANK(team), task->bar);
-    if (task->super.status == UCC_OK) {
+
+    status = ucc_tl_cuda_shm_barrier_test(UCC_TL_TEAM_RANK(team), task->bar);
+    if (status == UCC_OK) {
+        status = ucc_tl_cuda_alltoallv_unmap(task);
         ucc_tl_cuda_put_sync(task);
     }
+
+    task->super.status = status;
 }
 
 ucc_status_t ucc_tl_cuda_alltoallv_ce_start(ucc_coll_task_t *coll_task)
@@ -351,13 +395,14 @@ ucc_tl_cuda_alltoallv_ce_triggered_post_setup(ucc_coll_task_t *coll_task)
     return UCC_OK;
 }
 
-//NOLINTNEXTLINE
+//NOLINTNEXTLINE: task is unused
 size_t ucc_tl_cuda_alltoallv_get_size(const ucc_tl_cuda_task_t *task,
                                       size_t *sizes, ucc_rank_t block)
 {
     return sizes[block];
 }
 
+//NOLINTNEXTLINE: task is unused
 size_t ucc_tl_cuda_alltoallv_get_offset(const ucc_tl_cuda_task_t *task,
                                         size_t *displ, ucc_rank_t block)
 {
@@ -410,7 +455,6 @@ ucc_status_t ucc_tl_cuda_alltoallv_ce_init(ucc_tl_cuda_task_t *task)
 
     task->super.flags |= UCC_COLL_TASK_FLAG_EXECUTOR;
     task->super.post           = ucc_tl_cuda_alltoallv_ce_start;
-    task->super.triggered_post = ucc_triggered_post;
     task->super.triggered_post_setup =
         ucc_tl_cuda_alltoallv_ce_triggered_post_setup;
     task->super.progress = ucc_tl_cuda_alltoallv_ce_progress;

@@ -26,11 +26,22 @@ local_npic_filepath="${local_npic_dir}${o_filename}"
 
 mkdir -p $pic_dir
 
-cmd="${@:3} -Xcompiler -fPIC -o ${pic_filepath}"
+tmpcmd="${@:3}"
+if [[ "$tmpcmd" == *"amdclang"* ]]; then
+  cmd="${@:3:2} -x hip -target x86_64-unknown-linux-gnu ${@:5} -fPIC -O3 -o ${pic_filepath}"
+elif [[ "$tmpcmd" == *"hipcc"* ]]; then
+  cmd="${@:3} -fPIC -o ${pic_filepath}"
+else
+  cmd="${@:3} -Xcompiler -fPIC -o ${pic_filepath}"
+fi
 echo $cmd
 $cmd
 
-cmd="${@:3} -o ${npic_filepath}"
+if [[ "$tmpcmd" == *"amdclang"* ]]; then
+  cmd="${@:3:2} -x hip -target x86_64-unknown-linux-gnu ${@:5} -O3 -o ${npic_filepath}"
+else
+  cmd="${@:3} -o ${npic_filepath}"
+fi
 echo $cmd
 $cmd
 

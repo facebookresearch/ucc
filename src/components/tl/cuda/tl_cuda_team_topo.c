@@ -1,7 +1,13 @@
+/**
+ * Copyright (c) 2022-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *
+ * See file LICENSE for terms.
+ */
+
 #include "tl_cuda_team_topo.h"
 #include "tl_cuda.h"
 
-#define UCC_TL_CUDA_TEAM_TOPO_SAME_DEVICE -1
+#define UCC_TL_CUDA_TEAM_TOPO_SAME_DEVICE ((ucc_rank_t)(UCC_RANK_MAX))
 
 static ucc_status_t
 ucc_tl_cuda_team_topo_add_ring(const ucc_tl_cuda_team_t *team,
@@ -14,6 +20,7 @@ ucc_tl_cuda_team_topo_add_ring(const ucc_tl_cuda_team_t *team,
     ucc_status_t status;
     int i, j;
 
+    ucc_assert(size > 1);
     for (i = 0; i < num_dups; i++) {
         topo->rings[topo->num_rings + i].ring  = NULL;
         topo->rings[topo->num_rings + i].iring = NULL;
@@ -52,7 +59,7 @@ free_rings:
 
 static ucc_status_t
 ucc_tl_cuda_team_topo_build_ring(const ucc_tl_cuda_team_t *team,
-                                 const int *graph,
+                                 const ucc_rank_t *graph,
                                  ucc_tl_cuda_ring_t *ring,
                                  ucc_rank_t pos,
                                  int width)
@@ -115,8 +122,9 @@ ucc_tl_cuda_team_topo_init_rings(const ucc_tl_cuda_team_t *team,
     ucc_tl_cuda_ring_t ring;
     int i, width, nr, num_rings, min_width;
     ucc_status_t status;
-    int *graph;
+    ucc_rank_t *graph;
 
+    ucc_assert(size > 1);
     topo->num_rings = 0;
     ring.ring = (ucc_rank_t*) ucc_malloc(size * sizeof(ucc_rank_t),
                                          "cuda_topo_ring");
@@ -125,7 +133,7 @@ ucc_tl_cuda_team_topo_init_rings(const ucc_tl_cuda_team_t *team,
         return UCC_ERR_NO_MEMORY;
     }
 
-    graph = (ucc_rank_t*) ucc_malloc(size * size * sizeof(int),
+    graph = (ucc_rank_t*) ucc_malloc(size * size * sizeof(ucc_rank_t),
                                      "cuda_topo_graph");
     if (!graph) {
         status = UCC_ERR_NO_MEMORY;
@@ -133,9 +141,7 @@ ucc_tl_cuda_team_topo_init_rings(const ucc_tl_cuda_team_t *team,
         goto free_ring;
     }
 
-    for (i = 0; i < size * size; i++) {
-        graph[i] = topo->matrix[i];
-    }
+    memcpy(graph, topo->matrix, size * size * sizeof(ucc_rank_t));
 
     num_rings = 0;
     min_width = 4;
@@ -160,7 +166,7 @@ ucc_tl_cuda_team_topo_init_rings(const ucc_tl_cuda_team_t *team,
 
     if (num_rings == 0) {
         status = UCC_ERR_NOT_SUPPORTED;
-        tl_info(UCC_TL_TEAM_LIB(team), "no rings found");
+        tl_debug(UCC_TL_TEAM_LIB(team), "no rings found");
         goto free_graph;
     }
 
@@ -230,6 +236,7 @@ ucc_tl_cuda_team_topo_init_proxies(const ucc_tl_cuda_team_t *team,
     float *data;
     float score, min_score;
     ucc_status_t status;
+    char pci_str[2][MAX_PCI_BUS_ID_STR];
 
     topo->proxy_needed = 0;
 
@@ -240,6 +247,7 @@ ucc_tl_cuda_team_topo_init_proxies(const ucc_tl_cuda_team_t *team,
     }
 
     topo->num_proxies = num_proxies;
+    topo->is_fully_connected = (num_proxies == 0) ? 1 : 0;
     if (num_proxies == 0) {
         return UCC_OK;
     }
@@ -297,10 +305,14 @@ ucc_tl_cuda_team_topo_init_proxies(const ucc_tl_cuda_team_t *team,
                 }
             }
             if (proxy == UCC_RANK_INVALID) {
-                tl_info(UCC_TL_TEAM_LIB(team), "no proxy found between "
-                        "dev %d rank %d and dev %d rank %d, "
-                        "cuda topology is not supported",
-                        team->ids[i].device, i, team->ids[j].device, j);
+                ucc_tl_cuda_topo_pci_id_to_str(&team->ids[i].pci_id,
+                                                pci_str[0], MAX_PCI_BUS_ID_STR);
+                ucc_tl_cuda_topo_pci_id_to_str(&team->ids[j].pci_id,
+                                                pci_str[1], MAX_PCI_BUS_ID_STR);
+                tl_debug(UCC_TL_TEAM_LIB(team), "no proxy found between "
+                         "dev %s (%d) and dev %s (%d), "
+                         "cuda topology is not supported",
+                        pci_str[0], i, pci_str[j], j);
                 status = UCC_ERR_NOT_SUPPORTED;
                 goto free_data;
             }
@@ -327,7 +339,7 @@ free_proxy:
 
 static ucc_status_t
 ucc_tl_cuda_team_topo_init_matrix(const ucc_tl_cuda_team_t *team,
-                                  int *matrix)
+                                  ucc_rank_t *matrix)
 {
     ucc_tl_cuda_topo_t *topo = UCC_TL_CUDA_TEAM_CTX(team)->topo;
     int                 size = UCC_TL_TEAM_SIZE(team);
@@ -370,8 +382,8 @@ ucc_status_t ucc_tl_cuda_team_topo_create(const ucc_tl_team_t *cuda_team,
         return UCC_ERR_NO_MEMORY;
     }
 
-    topo->matrix = (int*)ucc_malloc(size * size * sizeof(int),
-                                    "cuda_topo_matrix");
+    topo->matrix = (ucc_rank_t*)ucc_malloc(size * size * sizeof(ucc_rank_t),
+                                           "cuda_topo_matrix");
     if (!topo->matrix) {
         tl_error(UCC_TL_TEAM_LIB(team), "failed to alloc cuda team topo matrix");
         status = UCC_ERR_NO_MEMORY;
@@ -418,33 +430,41 @@ void ucc_tl_cuda_team_topo_print_proxies(const ucc_tl_team_t *tl_team,
     ucc_rank_t          size = UCC_TL_TEAM_SIZE(team);
     ucc_rank_t          rank = UCC_TL_TEAM_RANK(team);
     ucc_rank_t i;
+    char pci_str[3][MAX_PCI_BUS_ID_STR];
 
     for (i = 0; i < size; i++) {
         if (ucc_tl_cuda_team_topo_is_direct(tl_team, topo, rank, i)) {
+            ucc_tl_cuda_topo_pci_id_to_str(&team->ids[rank].pci_id,
+                                            pci_str[0], MAX_PCI_BUS_ID_STR);
+            ucc_tl_cuda_topo_pci_id_to_str(&team->ids[i].pci_id,
+                                            pci_str[1], MAX_PCI_BUS_ID_STR);
             if (topo->matrix[rank * size +i] == UCC_TL_CUDA_TEAM_TOPO_SAME_DEVICE)
             {
                 tl_debug(UCC_TL_TEAM_LIB(team),
-                        "dev %d rank %d to dev %d rank %d: same device",
-                        team->ids[rank].device, rank, team->ids[i].device, i);
+                        "dev %s (%d) to dev %s (%d): same device",
+                        pci_str[0], rank, pci_str[1], i);
+
             } else {
                 tl_debug(UCC_TL_TEAM_LIB(team),
-                        "dev %d rank %d to dev %d rank %d: %d direct links",
-                        team->ids[rank].device, rank, team->ids[i].device, i,
+                        "dev %s (%d) to dev %s (%d): %d direct links",
+                        pci_str[0], rank, pci_str[1], i,
                         topo->matrix[rank * size + i]);
             }
         }
     }
 
     for (i = 0; i < topo->num_proxies; i++) {
+        ucc_tl_cuda_topo_pci_id_to_str(&team->ids[topo->proxies[i].src].pci_id,
+                                        pci_str[0], MAX_PCI_BUS_ID_STR);
+        ucc_tl_cuda_topo_pci_id_to_str(&team->ids[topo->proxies[i].dst].pci_id,
+                                        pci_str[1], MAX_PCI_BUS_ID_STR);
+        ucc_tl_cuda_topo_pci_id_to_str(&team->ids[topo->proxies[i].proxy].pci_id,
+                                        pci_str[2], MAX_PCI_BUS_ID_STR);
         tl_debug(UCC_TL_TEAM_LIB(team),
-                    "dev %d rank %d to dev %d rank %d: "
-                    "proxy dev %d rank %d",
-                    team->ids[topo->proxies[i].src].device,
-                    topo->proxies[i].src,
-                    team->ids[topo->proxies[i].dst].device,
-                    topo->proxies[i].dst,
-                    team->ids[topo->proxies[i].proxy].device,
-                    topo->proxies[i].proxy);
+                 "dev %s (%d) to dev %s (%d): proxy dev %s (%d)",
+                 pci_str[0], topo->proxies[i].src,
+                 pci_str[1], topo->proxies[i].dst,
+                 pci_str[2], topo->proxies[i].proxy);
     }
 }
 

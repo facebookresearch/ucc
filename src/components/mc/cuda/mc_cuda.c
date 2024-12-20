@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2020-2021, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2020-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  *
  * See file LICENSE for terms.
  */
@@ -50,15 +50,15 @@ static ucc_status_t ucc_mc_cuda_init(const ucc_mc_params_t *mc_params)
     int         num_devices, driver_ver;
     cudaError_t cuda_st;
 
-    ucc_mc_cuda.stream             = NULL;
-    ucc_mc_cuda.stream_initialized = 0;
+    ucc_mc_cuda_config = ucc_derived_of(ucc_mc_cuda.super.config,
+                                        ucc_mc_cuda_config_t);
     ucc_strncpy_safe(ucc_mc_cuda.super.config->log_component.name,
                      ucc_mc_cuda.super.super.name,
                      sizeof(ucc_mc_cuda.super.config->log_component.name));
     ucc_mc_cuda.thread_mode = mc_params->thread_mode;
     cuda_st = cudaGetDeviceCount(&num_devices);
     if ((cuda_st != cudaSuccess) || (num_devices == 0)) {
-        mc_info(&ucc_mc_cuda.super, "cuda devices are not found");
+        mc_debug(&ucc_mc_cuda.super, "cuda devices are not found");
         return UCC_ERR_NO_RESOURCE;
     }
     CUDADRV_FUNC(cuDriverGetVersion(&driver_ver));
@@ -100,6 +100,7 @@ static ucc_status_t ucc_mc_cuda_init(const ucc_mc_params_t *mc_params)
                  "with driver version %d", driver_ver);
     }
 #endif
+    ucc_mc_cuda.resources_hash = kh_init(ucc_mc_cuda_resources_hash);
     // lock assures single mpool initiation when multiple threads concurrently execute
     // different collective operations thus concurrently entering init function.
     ucc_spinlock_init(&ucc_mc_cuda.init_spinlock, 0);
@@ -112,48 +113,72 @@ static ucc_status_t ucc_mc_cuda_get_attr(ucc_mc_attr_t *mc_attr)
     if (mc_attr->field_mask & UCC_MC_ATTR_FIELD_THREAD_MODE) {
         mc_attr->thread_mode = ucc_mc_cuda.thread_mode;
     }
+    if (mc_attr->field_mask & UCC_MC_ATTR_FIELD_FAST_ALLOC_SIZE) {
+        if (MC_CUDA_CONFIG->mpool_max_elems > 0) {
+            mc_attr->fast_alloc_size = MC_CUDA_CONFIG->mpool_elem_size;
+        } else {
+            mc_attr->fast_alloc_size = 0;
+        }
+    }
     return UCC_OK;
 }
 
 static ucc_status_t ucc_mc_cuda_mem_alloc(ucc_mc_buffer_header_t **h_ptr,
-                                          size_t                   size)
+                                          size_t                   size,
+                                          ucc_memory_type_t        mt)
 {
     cudaError_t             st;
-    ucc_mc_buffer_header_t *h =
-        ucc_malloc(sizeof(ucc_mc_buffer_header_t), "mc cuda");
+    ucc_mc_buffer_header_t *h;
+
+    h = ucc_malloc(sizeof(ucc_mc_buffer_header_t), "mc cuda");
     if (ucc_unlikely(!h)) {
         mc_error(&ucc_mc_cuda.super, "failed to allocate %zd bytes",
                  sizeof(ucc_mc_buffer_header_t));
         return UCC_ERR_NO_MEMORY;
     }
-    st = cudaMalloc(&h->addr, size);
+    st = (mt == UCC_MEMORY_TYPE_CUDA) ? cudaMalloc(&h->addr, size) :
+                                        cudaMallocManaged(&h->addr, size,
+                                                          cudaMemAttachGlobal);
     if (ucc_unlikely(st != cudaSuccess)) {
         cudaGetLastError();
-        mc_error(&ucc_mc_cuda.super,
-                 "failed to allocate %zd bytes, "
+        mc_error(&ucc_mc_cuda.super, "failed to allocate %zd bytes, "
                  "cuda error %d(%s)",
                  size, st, cudaGetErrorString(st));
         ucc_free(h);
         return UCC_ERR_NO_MEMORY;
     }
+
     h->from_pool = 0;
     h->mt        = UCC_MEMORY_TYPE_CUDA;
     *h_ptr       = h;
-    mc_trace(&ucc_mc_cuda.super, "allocated %ld bytes with cudaMalloc", size);
+    mc_trace(&ucc_mc_cuda.super, "allocated %ld bytes with %s", size,
+             ucc_memory_type_names[mt]);
     return UCC_OK;
 }
 
 static ucc_status_t ucc_mc_cuda_mem_pool_alloc(ucc_mc_buffer_header_t **h_ptr,
-                                               size_t                   size)
+                                               size_t                   size,
+                                               ucc_memory_type_t        mt)
 {
-    ucc_mc_buffer_header_t *h = NULL;
-    if (size <= MC_CUDA_CONFIG->mpool_elem_size) {
-        h = (ucc_mc_buffer_header_t *)ucc_mpool_get(&ucc_mc_cuda.mpool);
+    ucc_mc_buffer_header_t  *h = NULL;
+    ucc_mc_cuda_resources_t *resources;
+    ucc_status_t             status;
+
+    if ((size <= MC_CUDA_CONFIG->mpool_elem_size) &&
+        (mt != UCC_MEMORY_TYPE_CUDA_MANAGED)) {
+        status = ucc_mc_cuda_get_resources(&resources);
+        if (ucc_unlikely(status != UCC_OK)) {
+            return status;
+        }
+
+        h = (ucc_mc_buffer_header_t *)ucc_mpool_get(&resources->scratch_mpool);
     }
+
     if (!h) {
         // Slow path
-        return ucc_mc_cuda_mem_alloc(h_ptr, size);
+        return ucc_mc_cuda_mem_alloc(h_ptr, size, mt);
     }
+
     if (ucc_unlikely(!h->addr)){
         return UCC_ERR_NO_MEMORY;
     }
@@ -161,61 +186,6 @@ static ucc_status_t ucc_mc_cuda_mem_pool_alloc(ucc_mc_buffer_header_t **h_ptr,
     mc_trace(&ucc_mc_cuda.super, "allocated %ld bytes from cuda mpool", size);
     return UCC_OK;
 }
-
-static ucc_status_t ucc_mc_cuda_chunk_alloc(ucc_mpool_t *mp, //NOLINT
-                                            size_t *size_p,
-                                            void **chunk_p)
-{
-    *chunk_p = ucc_malloc(*size_p, "mc cuda");
-    if (!*chunk_p) {
-        mc_error(&ucc_mc_cuda.super, "failed to allocate %zd bytes", *size_p);
-        return UCC_ERR_NO_MEMORY;
-    }
-
-    return UCC_OK;
-}
-
-static void ucc_mc_cuda_chunk_init(ucc_mpool_t *mp, //NOLINT
-                                   void *obj, void *chunk) //NOLINT
-{
-    ucc_mc_buffer_header_t *h = (ucc_mc_buffer_header_t *)obj;
-    cudaError_t st = cudaMalloc(&h->addr, MC_CUDA_CONFIG->mpool_elem_size);
-    if (st != cudaSuccess) {
-        // h->addr will be 0 so ucc_mc_cuda_mem_alloc_pool function will
-        // return UCC_ERR_NO_MEMORY. As such mc_error message is suffice.
-        cudaGetLastError();
-        mc_error(&ucc_mc_cuda.super,
-                 "failed to allocate %zd bytes, "
-                 "cuda error %d(%s)",
-                 MC_CUDA_CONFIG->mpool_elem_size, st, cudaGetErrorString(st));
-    }
-    h->from_pool = 1;
-    h->mt        = UCC_MEMORY_TYPE_CUDA;
-}
-
-static void ucc_mc_cuda_chunk_release(ucc_mpool_t *mp, void *chunk) //NOLINT
-{
-    ucc_free(chunk);
-}
-
-static void ucc_mc_cuda_chunk_cleanup(ucc_mpool_t *mp, void *obj)
-{
-    ucc_mc_buffer_header_t *h = (ucc_mc_buffer_header_t *)obj;
-    cudaError_t             st;
-    st = cudaFree(h->addr);
-    if (st != cudaSuccess) {
-        cudaGetLastError();
-        mc_error(&ucc_mc_cuda.super,
-                 "failed to free mem at %p, "
-                 "cuda error %d(%s)",
-                 obj, st, cudaGetErrorString(st));
-    }
-}
-
-static ucc_mpool_ops_t ucc_mc_ops = {.chunk_alloc   = ucc_mc_cuda_chunk_alloc,
-                                     .chunk_release = ucc_mc_cuda_chunk_release,
-                                     .obj_init      = ucc_mc_cuda_chunk_init,
-                                     .obj_cleanup = ucc_mc_cuda_chunk_cleanup};
 
 static ucc_status_t ucc_mc_cuda_mem_free(ucc_mc_buffer_header_t *h_ptr)
 {
@@ -226,7 +196,7 @@ static ucc_status_t ucc_mc_cuda_mem_free(ucc_mc_buffer_header_t *h_ptr)
         mc_error(&ucc_mc_cuda.super,
                  "failed to free mem at %p, "
                  "cuda error %d(%s)",
-                 h_ptr->addr, st, cudaGetErrorString(st));
+                 h_ptr, st, cudaGetErrorString(st));
         return UCC_ERR_NO_MESSAGE;
     }
     ucc_free(h_ptr);
@@ -244,63 +214,72 @@ static ucc_status_t ucc_mc_cuda_mem_pool_free(ucc_mc_buffer_header_t *h_ptr)
 
 static ucc_status_t
 ucc_mc_cuda_mem_pool_alloc_with_init(ucc_mc_buffer_header_t **h_ptr,
-                                     size_t                   size)
+                                     size_t size,
+                                     ucc_memory_type_t mt)
 {
-    // lock assures single mpool initiation when multiple threads concurrently execute
-    // different collective operations thus concurrently entering init function.
-    ucc_spin_lock(&ucc_mc_cuda.init_spinlock);
-
     if (MC_CUDA_CONFIG->mpool_max_elems == 0) {
         ucc_mc_cuda.super.ops.mem_alloc = ucc_mc_cuda_mem_alloc;
         ucc_mc_cuda.super.ops.mem_free  = ucc_mc_cuda_mem_free;
-        ucc_spin_unlock(&ucc_mc_cuda.init_spinlock);
-        return ucc_mc_cuda_mem_alloc(h_ptr, size);
-    }
-
-    if (!ucc_mc_cuda.mpool_init_flag) {
-        ucc_status_t status = ucc_mpool_init(
-            &ucc_mc_cuda.mpool, 0, sizeof(ucc_mc_buffer_header_t), 0,
-            UCC_CACHE_LINE_SIZE, 1, MC_CUDA_CONFIG->mpool_max_elems,
-            &ucc_mc_ops, ucc_mc_cuda.thread_mode, "mc cuda mpool buffers");
-        if (status != UCC_OK) {
-            ucc_spin_unlock(&ucc_mc_cuda.init_spinlock);
-            return status;
-        }
+        return ucc_mc_cuda_mem_alloc(h_ptr, size, mt);
+    } else {
         ucc_mc_cuda.super.ops.mem_alloc = ucc_mc_cuda_mem_pool_alloc;
-        ucc_mc_cuda.mpool_init_flag     = 1;
+        ucc_mc_cuda.super.ops.mem_free  = ucc_mc_cuda_mem_pool_free;
+        return ucc_mc_cuda_mem_pool_alloc(h_ptr, size, mt);
     }
-    ucc_spin_unlock(&ucc_mc_cuda.init_spinlock);
-    return ucc_mc_cuda_mem_pool_alloc(h_ptr, size);
 }
 
 static ucc_status_t ucc_mc_cuda_memcpy(void *dst, const void *src, size_t len,
                                        ucc_memory_type_t dst_mem,
                                        ucc_memory_type_t src_mem)
 {
-    cudaError_t    st;
-    ucc_assert(dst_mem == UCC_MEMORY_TYPE_CUDA ||
-               src_mem == UCC_MEMORY_TYPE_CUDA);
+    ucc_status_t status;
+    ucc_mc_cuda_resources_t *resources;
 
-    UCC_MC_CUDA_INIT_STREAM();
-    st = cudaMemcpyAsync(dst, src, len, cudaMemcpyDefault, ucc_mc_cuda.stream);
-    if (ucc_unlikely(st != cudaSuccess)) {
-        cudaGetLastError();
-        mc_error(&ucc_mc_cuda.super,
-                 "failed to launch cudaMemcpyAsync,  dst %p, src %p, len %zd "
-                 "cuda error %d(%s)",
-                 dst, src, len, st, cudaGetErrorString(st));
-        return UCC_ERR_NO_MESSAGE;
+    ucc_assert(dst_mem == UCC_MEMORY_TYPE_CUDA ||
+               src_mem == UCC_MEMORY_TYPE_CUDA ||
+               dst_mem == UCC_MEMORY_TYPE_CUDA_MANAGED ||
+               src_mem == UCC_MEMORY_TYPE_CUDA_MANAGED);
+
+    status = ucc_mc_cuda_get_resources(&resources);
+    if (ucc_unlikely(status) != UCC_OK) {
+        return status;
     }
-    st = cudaStreamSynchronize(ucc_mc_cuda.stream);
-    if (ucc_unlikely(st != cudaSuccess)) {
-        cudaGetLastError();
+
+    status = CUDA_FUNC(cudaMemcpyAsync(dst, src, len, cudaMemcpyDefault,
+                                       resources->stream));
+    if (ucc_unlikely(status != UCC_OK)) {
         mc_error(&ucc_mc_cuda.super,
-                 "failed to synchronize mc_cuda.stream "
-                 "cuda error %d(%s)",
-                 st, cudaGetErrorString(st));
-        return UCC_ERR_NO_MESSAGE;
+                 "failed to launch cudaMemcpyAsync, dst %p, src %p, len %zd",
+                 dst, src, len);
+        return status;
     }
-    return UCC_OK;
+
+    status = CUDA_FUNC(cudaStreamSynchronize(resources->stream));
+
+    return status;
+}
+
+ucc_status_t ucc_mc_cuda_memset(void *ptr, int val, size_t len)
+{
+    ucc_status_t status;
+    ucc_mc_cuda_resources_t *resources;
+
+    status = ucc_mc_cuda_get_resources(&resources);
+    if (ucc_unlikely(status) != UCC_OK) {
+        return status;
+    }
+
+    status = CUDA_FUNC(cudaMemsetAsync(ptr, val, len, resources->stream));
+    if (ucc_unlikely(status != UCC_OK)) {
+        mc_error(&ucc_mc_cuda.super,
+                 "failed to launch cudaMemsetAsync, dst %p, len %zd",
+                 ptr, len);
+        return status;
+    }
+
+    status = CUDA_FUNC(cudaStreamSynchronize(resources->stream));
+
+    return status;
 }
 
 static ucc_status_t ucc_mc_cuda_mem_query(const void *ptr,
@@ -372,17 +351,74 @@ static ucc_status_t ucc_mc_cuda_mem_query(const void *ptr,
     return UCC_OK;
 }
 
+ucc_status_t ucc_mc_cuda_get_resources(ucc_mc_cuda_resources_t **resources)
+{
+    CUcontext cu_ctx;
+    unsigned long long int cu_ctx_id;
+    ucc_status_t status;
+
+    status = CUDADRV_FUNC(cuCtxGetCurrent(&cu_ctx));
+    if (ucc_unlikely(status != UCC_OK)) {
+        mc_error(&ucc_mc_cuda.super, "failed to get current CUDA context");
+        return status;
+    }
+
+#if CUDA_VERSION < 12000
+    cu_ctx_id = 1;
+#else
+    CUresult cu_status;
+    cu_status = cuCtxGetId(cu_ctx, &cu_ctx_id);
+    if (ucc_unlikely(cu_status != CUDA_SUCCESS)) {
+        /* worakround for pytorch, progress thread doesn't have cuda context for GPU 0*/
+        /* cuda context might be not initialized, try to proceed with default device*/
+        cu_ctx_id = 0x12345;
+        mc_debug(&ucc_mc_cuda.super,
+                 "failed to get current CUDA context ID (%d)", cu_status);
+    }
+#endif
+
+    *resources = mc_cuda_resources_hash_get(ucc_mc_cuda.resources_hash,
+                                            cu_ctx_id);
+    if (ucc_unlikely(*resources == NULL)) {
+        ucc_spin_lock(&ucc_mc_cuda.init_spinlock);
+        *resources = mc_cuda_resources_hash_get(ucc_mc_cuda.resources_hash,
+                                                cu_ctx_id);
+        if (*resources == NULL) {
+            *resources = ucc_malloc(sizeof(ucc_mc_cuda_resources_t),
+                                    "mc cuda resources");
+            if (*resources == NULL) {
+                mc_error(&ucc_mc_cuda.super,
+                         "failed to allocate %zd bytes for resources",
+                         sizeof(ucc_mc_cuda_resources_t));
+                ucc_spin_unlock(&ucc_mc_cuda.init_spinlock);
+                return UCC_ERR_NO_MEMORY;
+            }
+            status = ucc_mc_cuda_resources_init(&ucc_mc_cuda.super,
+                                                *resources);
+            if (status != UCC_OK) {
+                ucc_free(*resources);
+                ucc_spin_unlock(&ucc_mc_cuda.init_spinlock);
+                return status;
+            }
+            mc_cuda_resources_hash_put(ucc_mc_cuda.resources_hash, cu_ctx_id,
+                                       *resources);
+        }
+        ucc_spin_unlock(&ucc_mc_cuda.init_spinlock);
+    }
+    return UCC_OK;
+}
+
 static ucc_status_t ucc_mc_cuda_finalize()
 {
-    if (ucc_mc_cuda.stream != NULL) {
-        CUDA_CHECK(cudaStreamDestroy(ucc_mc_cuda.stream));
-        ucc_mc_cuda.stream = NULL;
+    ucc_mc_cuda_resources_t *resources;
+
+    resources = mc_cuda_resources_hash_pop(ucc_mc_cuda.resources_hash);
+    while (resources) {
+        ucc_mc_cuda_resources_cleanup(resources);
+        resources = mc_cuda_resources_hash_pop(ucc_mc_cuda.resources_hash);
     }
-    if (ucc_mc_cuda.mpool_init_flag) {
-        ucc_mpool_cleanup(&ucc_mc_cuda.mpool, 1);
-        ucc_mc_cuda.mpool_init_flag     = 0;
-        ucc_mc_cuda.super.ops.mem_alloc = ucc_mc_cuda_mem_pool_alloc_with_init;
-    }
+
+    ucc_mc_cuda.super.ops.mem_alloc = ucc_mc_cuda_mem_pool_alloc_with_init;
     ucc_spinlock_destroy(&ucc_mc_cuda.init_spinlock);
     return UCC_OK;
 }
@@ -399,6 +435,7 @@ ucc_mc_cuda_t ucc_mc_cuda = {
     .super.ops.mem_alloc          = ucc_mc_cuda_mem_pool_alloc_with_init,
     .super.ops.mem_free           = ucc_mc_cuda_mem_pool_free,
     .super.ops.memcpy             = ucc_mc_cuda_memcpy,
+    .super.ops.memset             = ucc_mc_cuda_memset,
     .super.ops.flush              = ucc_mc_cuda_flush_not_supported,
     .super.config_table =
         {
@@ -407,8 +444,9 @@ ucc_mc_cuda_t ucc_mc_cuda = {
             .table  = ucc_mc_cuda_config_table,
             .size   = sizeof(ucc_mc_cuda_config_t),
         },
-    .mpool_init_flag               = 0,
 };
+
+ucc_mc_cuda_config_t *ucc_mc_cuda_config;
 
 UCC_CONFIG_REGISTER_TABLE_ENTRY(&ucc_mc_cuda.super.config_table,
                                 &ucc_config_global_list);

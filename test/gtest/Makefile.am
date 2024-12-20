@@ -64,48 +64,62 @@ gtest_CXXFLAGS = -std=gnu++11 \
 	-DGTEST_UCM_HOOK_LIB_DIR="\"${abs_builddir}/ucm/test_dlopen/.libs\"" \
 	-DGTEST_UCC_TOP_SRCDIR="\"${UCC_TOP_SRCDIR}\""
 
-gtest_SOURCES =                     \
-	common/gtest-all.cc             \
-	common/test_obj_size.cc         \
-	common/main.cc                  \
-	common/test_ucc.cc              \
-	tl/tl_test.cc                   \
-	core/test_lib_config.cc         \
-	core/test_lib.cc                \
-	core/test_context_config.cc     \
-	core/test_context.cc            \
-	core/test_mc.cc                 \
-	core/test_mc_reduce.cc          \
-	core/test_team.cc               \
-	core/test_schedule.cc           \
-	core/test_topo.cc               \
-	core/test_service_coll.cc       \
-	core/test_timeout.cc            \
-	core/test_utils.cc              \
-	coll/test_barrier.cc            \
-	coll/test_alltoall.cc           \
-	coll/test_alltoallv.cc          \
-	coll/test_allgather.cc          \
-	coll/test_allgatherv.cc         \
-	coll/test_gather.cc         	\
-	coll/test_bcast.cc              \
-	coll/test_reduce.cc             \
-	coll/test_allreduce.cc          \
-	coll/test_reduce_scatter.cc     \
-	coll/test_reduce_scatterv.cc    \
-	utils/test_string.cc            \
-	utils/test_ep_map.cc            \
-	utils/test_lock_free_queue.cc   \
-	utils/test_math.cc              \
-	utils/test_cfg_file.cc          \
-	coll_score/test_score.cc        \
-	coll_score/test_score_str.cc    \
-	coll_score/test_score_update.cc \
-	active_set/test_active_set.cc
+gtest_SOURCES =                           \
+	common/gtest-all.cc                   \
+	common/test_obj_size.cc               \
+	common/main.cc                        \
+	common/test_ucc.cc                    \
+	tl/tl_test.cc                         \
+	core/test_lib_config.cc               \
+	core/test_lib.cc                      \
+	core/test_context_config.cc           \
+	core/test_context.cc                  \
+	core/test_mc.cc                       \
+	core/test_mc_reduce.cc                \
+	core/test_team.cc                     \
+	core/test_schedule.cc                 \
+	core/test_topo.cc                     \
+	core/test_service_coll.cc             \
+	core/test_timeout.cc                  \
+	core/test_utils.cc                    \
+	coll/test_barrier.cc                  \
+	coll/test_alltoall.cc                 \
+	coll/test_alltoallv.cc                \
+	coll/test_allgather.cc                \
+	coll/test_allgatherv.cc               \
+	coll/test_gather.cc                   \
+	coll/test_gatherv.cc                  \
+	coll/test_bcast.cc                    \
+	coll/test_reduce.cc                   \
+	coll/test_allreduce_sliding_window.cc \
+	coll/test_allreduce.cc                \
+	coll/test_reduce_scatter.cc           \
+	coll/test_reduce_scatterv.cc          \
+	coll/test_scatter.cc                  \
+	coll/test_scatterv.cc                 \
+	utils/test_string.cc                  \
+	utils/test_ep_map.cc                  \
+	utils/test_lock_free_queue.cc         \
+	utils/test_math.cc                    \
+	utils/test_cfg_file.cc                \
+	utils/test_parser.cc                  \
+	coll_score/test_score.cc              \
+	coll_score/test_score_str.cc          \
+	coll_score/test_score_update.cc       \
+	active_set/test_active_set.cc         \
+	asym_mem/test_asymmetric_memory.cc
+
+if TL_MLX5_ENABLED
+    gtest_SOURCES  += tl/mlx5/test_tl_mlx5.cc \
+                      tl/mlx5/test_tl_mlx5_qps.cc\
+                      tl/mlx5/test_tl_mlx5_wqe.cc
+    gtest_LDADD    += $(IBVERBS_LIBADD) $(MLX5DV_LIBADD)
+endif
 
 if HAVE_CUDA
-gtest_SOURCES += \
-	core/test_mc_cuda.cc
+gtest_SOURCES +=                    \
+	core/test_mc_cuda.cc            \
+	core/test_ec_cuda.cc
 gtest_CPPFLAGS += \
 	$(CUDA_CPPFLAGS)
 gtest_LDFLAGS += \
@@ -116,18 +130,26 @@ endif
 
 if HAVE_ROCM
 gtest_SOURCES  += core/test_mc_rocm.cc
+gtest_CXXFLAGS += $(HIP_CXXFLAGS)
 gtest_CPPFLAGS += $(HIP_CPPFLAGS)
 gtest_LDFLAGS  += $(HIP_LDFLAGS)
 gtest_LDADD    += $(HIP_LIBS)
 endif
 
+if HAVE_UCX
+gtest_CXXFLAGS += $(UCX_CXXFLAGS)
+gtest_CPPFLAGS += $(UCX_CPPFLAGS)
+gtest_LDFLAGS  += $(UCX_LDFLAGS)
+gtest_LDADD    += $(UCX_LIBS) $(UCX_LIBADD)
+endif
 
-noinst_HEADERS =            \
-	common/gtest.h          \
-	common/test.h           \
-	common/test_ucc.h       \
-	core/test_context.h     \
-	core/test_mc_reduce.h   \
+noinst_HEADERS =                         \
+	common/gtest.h                       \
+	common/test.h                        \
+	common/test_ucc.h                    \
+	core/test_context.h                  \
+	core/test_mc_reduce.h                \
+	coll/test_allreduce_sliding_window.h \
 	coll_score/test_score.h
 
 .PHONY: test test gdb valgrind fix_rpath ucc

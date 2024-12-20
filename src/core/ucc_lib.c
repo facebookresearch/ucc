@@ -1,5 +1,6 @@
 /**
- * Copyright (c) 2020, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2020-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *
  * See file LICENSE for terms.
  */
 
@@ -89,7 +90,7 @@ static ucc_status_t ucc_cl_lib_init(const ucc_lib_params_t *user_params,
     }
 
     lib->cl_attrs = (ucc_cl_lib_attr_t *)
-        ucc_malloc(sizeof(ucc_cl_lib_attr_t) * n_cls, "cl_attrs");
+        ucc_calloc(n_cls, sizeof(ucc_cl_lib_attr_t), "cl_attrs");
     if (!lib->cl_attrs) {
         ucc_error("failed to allocate %zd bytes for cl_attrs",
                   sizeof(ucc_cl_lib_attr_t) * n_cls);
@@ -102,6 +103,7 @@ static ucc_status_t ucc_cl_lib_init(const ucc_lib_params_t *user_params,
         params.mask |= UCC_LIB_PARAM_FIELD_THREAD_MODE;
         params.thread_mode = UCC_THREAD_SINGLE;
     }
+    memset(&b_params, 0, sizeof(ucc_base_lib_params_t));
     ucc_copy_lib_params(&b_params.params, &params);
     ucc_assert(config->cls.count >= 1);
     lib->specific_cls_requested = (0 == ucc_cl_requested(config, UCC_CL_ALL));
@@ -121,6 +123,7 @@ static ucc_status_t ucc_cl_lib_init(const ucc_lib_params_t *user_params,
                       cl_iface->super.name);
             goto error_cfg_read;
         }
+        // coverity[overrun-buffer-val:FALSE]
         status = cl_iface->lib.init(&b_params, &cl_config->super.super, &b_lib);
         if (UCC_OK != status) {
             if (lib->specific_cls_requested) {
@@ -128,8 +131,8 @@ static ucc_status_t ucc_cl_lib_init(const ucc_lib_params_t *user_params,
                           cl_iface->super.name);
                 goto error_cl_init;
             } else {
-                ucc_info("lib_init failed for component: %s, skipping",
-                         cl_iface->super.name);
+                ucc_debug("lib_init failed for component: %s, skipping",
+                          cl_iface->super.name);
                 ucc_base_config_release(&cl_config->super.super);
                 continue;
             }
@@ -140,11 +143,13 @@ static ucc_status_t ucc_cl_lib_init(const ucc_lib_params_t *user_params,
         status = cl_iface->lib.get_attr(&cl_lib->super,
                                         &attrs[lib->n_cl_libs_opened].super);
         if (UCC_OK != status) {
-            ucc_error("failed to query cl lib %s attr", cl_lib->iface->super.name);
+            ucc_error("failed to query cl lib %s attr",
+                      cl_lib->iface->super.name);
             return status;
         }
-        ucc_info("lib_prefix \"%s\": initialized component \"%s\" score %d",
-                 config->full_prefix, cl_iface->super.name, cl_iface->super.score);
+        ucc_debug("lib_prefix \"%s\": initialized component \"%s\" score %d",
+                  config->full_prefix, cl_iface->super.name,
+                  cl_iface->super.score);
         if (attrs[lib->n_cl_libs_opened].super.attr.thread_mode > highest_tm) {
             highest_tm = attrs[lib->n_cl_libs_opened].super.attr.thread_mode;
         }
@@ -193,7 +198,7 @@ static ucc_status_t ucc_cl_lib_init(const ucc_lib_params_t *user_params,
     }
     /* Check if the combination of the selected CLs provides all the
        requested coll_types: not an error, just print a message if not
-       all the colls are supproted */
+       all the colls are supported */
     if (params.mask & UCC_LIB_PARAM_FIELD_COLL_TYPES &&
         ((params.coll_types & supported_coll_types) != params.coll_types)) {
         ucc_debug("selected set of CLs does not provide all the requested "
@@ -268,12 +273,13 @@ static ucc_status_t ucc_tl_lib_init(const ucc_lib_params_t *user_params,
                          tl_iface->super.name);
                 continue;
             }
+            // coverity[overrun-buffer-val:FALSE]
             status = tl_iface->lib.init(&b_params, &tl_config->super.super,
                                         &b_lib);
             ucc_base_config_release(&tl_config->super.super);
             if (UCC_OK != status) {
-                ucc_info("lib_init failed for component: %s, skipping",
-                         tl_iface->super.name);
+                ucc_debug("lib_init failed for component: %s, skipping",
+                          tl_iface->super.name);
                 continue;
             }
             tl_lib = ucc_derived_of(b_lib, ucc_tl_lib_t);
@@ -350,6 +356,14 @@ ucc_status_t ucc_init_version(unsigned api_major_version,
         goto error;
     }
 
+    status = ucc_mpool_init(&lib->stub_tasks_mp, 0, sizeof(ucc_coll_task_t), 0,
+                            UCC_CACHE_LINE_SIZE, 8, UINT_MAX,
+                            &ucc_coll_task_mpool_ops, UCC_THREAD_MULTIPLE,
+                            "stub_tasks");
+    if (status != UCC_OK) {
+        goto error;
+    }
+
     *lib_p = lib;
     return UCC_OK;
 error:
@@ -402,8 +416,9 @@ ucc_status_t ucc_lib_config_read(const char *env_prefix, const char *filename,
                          strlen(base_prefix) + 1);
     }
 
-    status = ucc_config_parser_fill_opts(config, ucc_lib_config_table,
-                                         config->full_prefix, NULL, 0);
+    status = ucc_config_parser_fill_opts(config,
+                                         UCC_CONFIG_GET_TABLE(ucc_lib_config_table),
+                                         config->full_prefix, 0);
     if (status != UCC_OK) {
         ucc_error("failed to read UCC lib config");
         goto err_free_prefix;
@@ -465,7 +480,9 @@ ucc_status_t ucc_finalize(ucc_lib_info_t *lib)
 
     gl_status = UCC_OK;
     ucc_assert(lib->n_cl_libs_opened > 0);
-    ucc_assert(lib->cl_libs);
+    ucc_assert(lib->cl_libs != NULL);
+
+    ucc_mpool_cleanup(&lib->stub_tasks_mp, 1);
     for (i = 0; i < lib->n_tl_libs_opened; i++) {
         lib->tl_libs[i]->iface->lib.finalize(&lib->tl_libs[i]->super);
     }

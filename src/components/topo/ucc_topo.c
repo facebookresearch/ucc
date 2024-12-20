@@ -1,5 +1,6 @@
 /*
- * Copyright (c) 2021, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2021-2022, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *
  * See file LICENSE for terms.
  */
 
@@ -172,11 +173,15 @@ ucc_status_t ucc_topo_init(ucc_subset_t set, ucc_context_topo_t *ctx_topo,
         topo->sbgps[i].status = UCC_SBGP_NOT_INIT;
     }
     topo->n_sockets           = -1;
-    topo->node_leader_rank    = -1;
+    topo->node_leader_rank    = UCC_RANK_INVALID;
     topo->node_leader_rank_id = 0;
     topo->set                 = set;
     topo->min_ppn             = UCC_RANK_MAX;
     topo->max_ppn             = 0;
+    topo->min_socket_size     = UCC_RANK_MAX;
+    topo->max_socket_size     = 0;
+    topo->min_numa_size       = UCC_RANK_MAX;
+    topo->max_numa_size       = 0;
     topo->all_sockets         = NULL;
     topo->all_numas           = NULL;
 
@@ -200,6 +205,14 @@ void ucc_topo_cleanup(ucc_topo_t *topo)
                 }
             }
             ucc_free(topo->all_sockets);
+        }
+        if (topo->all_numas) {
+            for (i = 0; i < topo->n_numas; i++) {
+                if (topo->all_numas[i].status == UCC_SBGP_ENABLED) {
+                    ucc_sbgp_cleanup(&topo->all_numas[i]);
+                }
+            }
+            ucc_free(topo->all_numas);
         }
         ucc_free(topo);
     }

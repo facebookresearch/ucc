@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2020, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2020-2024, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  *
  * See file LICENSE for terms.
  */
@@ -17,20 +17,20 @@ UCC_CLASS_INIT_FUNC(ucc_cl_basic_lib_t, const ucc_base_lib_params_t *params,
     const ucc_cl_lib_config_t *cl_config =
         ucc_derived_of(config, ucc_cl_lib_config_t);
     UCC_CLASS_CALL_SUPER_INIT(ucc_cl_lib_t, &ucc_cl_basic.super, cl_config);
-    cl_info(&self->super, "initialized lib object: %p", self);
+    cl_debug(&self->super, "initialized lib object: %p", self);
     return UCC_OK;
 }
 
 UCC_CLASS_CLEANUP_FUNC(ucc_cl_basic_lib_t)
 {
-    cl_info(&self->super, "finalizing lib object: %p", self);
+    cl_debug(&self->super, "finalizing lib object: %p", self);
 }
 
 UCC_CLASS_DEFINE(ucc_cl_basic_lib_t, ucc_cl_lib_t);
 
 static inline ucc_status_t check_tl_lib_attr(const ucc_base_lib_t *lib,
-                                             ucc_tl_iface_t *      tl_iface,
-                                             ucc_cl_lib_attr_t *   attr)
+                                             ucc_tl_iface_t       *tl_iface,
+                                             ucc_cl_lib_attr_t    *attr)
 {
     ucc_tl_lib_attr_t tl_attr;
     ucc_status_t      status;
@@ -88,5 +88,13 @@ ucc_status_t ucc_cl_basic_get_lib_attr(const ucc_base_lib_t *lib,
             return status;
         }
     }
+    return UCC_OK;
+}
+
+ucc_status_t ucc_cl_basic_get_lib_properties(ucc_base_lib_properties_t *prop)
+{
+    prop->default_team_size = 1;
+    prop->min_team_size     = 1;
+    prop->max_team_size     = UCC_RANK_MAX;
     return UCC_OK;
 }

@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2021, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2021-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  *
  * See file LICENSE for terms.
  */
@@ -10,6 +10,8 @@
 
 ucc_status_t ucc_tl_nccl_get_lib_attr(const ucc_base_lib_t *lib,
                                       ucc_base_lib_attr_t  *base_attr);
+
+ucc_status_t ucc_tl_nccl_get_lib_properties(ucc_base_lib_properties_t *prop);
 
 ucc_status_t ucc_tl_nccl_get_context_attr(const ucc_base_context_t *context,
                                           ucc_base_ctx_attr_t      *base_attr);
@@ -36,6 +38,17 @@ static ucs_config_field_t ucc_tl_nccl_context_config_table[] = {
      ucs_offsetof(ucc_tl_nccl_context_config_t, sync_type),
      UCS_CONFIG_TYPE_ENUM(ucc_tl_nccl_completion_sync_names)
     },
+
+    {"BLOCKING", "yes",
+     "If set to no will use non-blocking mode communicator behavior, "
+     "if set to yes will use blocking mode",
+     ucs_offsetof(ucc_tl_nccl_context_config_t, nccl_cfg_blocking),
+     UCS_CONFIG_TYPE_BOOL},
+
+    {"LAZY_INIT", "yes",
+     "Initialize NCCL communicator on first collective",
+     ucc_offsetof(ucc_tl_nccl_context_config_t, nccl_lazy_init),
+     UCC_CONFIG_TYPE_BOOL},
 
     {NULL}};
 

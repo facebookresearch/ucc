@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2021-2022, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2021-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  *
  * See file LICENSE for terms.
  */
@@ -23,7 +23,7 @@ void ucc_tl_ucp_allreduce_knomial_progress(ucc_coll_task_t *coll_task)
     ucc_tl_ucp_task_t     *task = ucc_derived_of(coll_task, ucc_tl_ucp_task_t);
     ucc_coll_args_t       *args = &TASK_ARGS(task);
     ucc_tl_ucp_team_t     *team = TASK_TEAM(task);
-    int                    avg_pre_op = UCC_TL_UCP_TEAM_LIB(team)->cfg.reduce_avg_pre_op;
+    int                    avg_pre_op = team->cfg.reduce_avg_pre_op;
     ucc_kn_radix_t         radix      = task->allreduce_kn.p.radix;
     uint8_t                node_type  = task->allreduce_kn.p.node_type;
     ucc_knomial_pattern_t *p          = &task->allreduce_kn.p;
@@ -34,7 +34,6 @@ void ucc_tl_ucp_allreduce_knomial_progress(ucc_coll_task_t *coll_task)
     size_t                 count      = args->dst.info.count;
     ucc_datatype_t         dt         = args->dst.info.datatype;
     size_t                 data_size  = count * ucc_dt_size(dt);
-    ucc_rank_t             size       = (ucc_rank_t)task->subset.map.ep_num;
     ucc_rank_t             rank       = task->subset.myrank;
     void                  *send_buf;
     ptrdiff_t              recv_offset;
@@ -91,7 +90,7 @@ UCC_KN_PHASE_EXTRA_REDUCE:
     }
     while(!ucc_knomial_pattern_loop_done(p)) {
         for (loop_step = 1; loop_step < radix; loop_step++) {
-            peer = ucc_knomial_pattern_get_loop_peer(p, rank, size, loop_step);
+            peer = ucc_knomial_pattern_get_loop_peer(p, rank, loop_step);
             if (peer == UCC_KN_PEER_NULL)
                 continue;
             peer = ucc_ep_map_eval(task->subset.map, peer);
@@ -108,8 +107,8 @@ UCC_KN_PHASE_EXTRA_REDUCE:
         }
 
         recv_offset = 0;
-        for (loop_step = 1; loop_step < radix; loop_step++) {
-            peer = ucc_knomial_pattern_get_loop_peer(p, rank, size, loop_step);
+        for (loop_step = radix - 1 ; loop_step > 0; loop_step--) {
+            peer = ucc_knomial_pattern_get_loop_peer(p, rank, loop_step);
             if (peer == UCC_KN_PEER_NULL)
                 continue;
             peer = ucc_ep_map_eval(task->subset.map, peer);
@@ -187,16 +186,21 @@ ucc_status_t ucc_tl_ucp_allreduce_knomial_start(ucc_coll_task_t *coll_task)
     ucc_tl_ucp_team_t *team      = TASK_TEAM(task);
     ucc_rank_t         size      = (ucc_rank_t)task->subset.map.ep_num;
     ucc_rank_t         rank      = task->subset.myrank;
+    ucc_memory_type_t  mem_type  = TASK_ARGS(task).dst.info.mem_type;
+    size_t             count     = TASK_ARGS(task).dst.info.count;
+    ucc_datatype_t     dt        = TASK_ARGS(task).dst.info.datatype;
+    size_t             data_size = count * ucc_dt_size(dt);
+    ucc_mrange_uint_t *p         = &team->cfg.allreduce_kn_radix;
+    ucc_kn_radix_t     cfg_radix;
     ucc_status_t       status;
 
     UCC_TL_UCP_PROFILE_REQUEST_EVENT(coll_task, "ucp_allreduce_kn_start", 0);
     task->allreduce_kn.phase = UCC_KN_PHASE_INIT;
     ucc_assert(UCC_IS_INPLACE(TASK_ARGS(task)) ||
-               (TASK_ARGS(task).src.info.mem_type ==
-               TASK_ARGS(task).dst.info.mem_type));
-    ucc_knomial_pattern_init(size, rank,
-                             ucc_min(UCC_TL_UCP_TEAM_LIB(team)->
-                                     cfg.allreduce_kn_radix, size),
+               (TASK_ARGS(task).src.info.mem_type == mem_type));
+    cfg_radix = ucc_tl_ucp_get_radix_from_range(team, data_size, mem_type, p,
+                                                UCC_UUNITS_AUTO_RADIX);
+    ucc_knomial_pattern_init(size, rank, ucc_min(cfg_radix, size),
                              &task->allreduce_kn.p);
     ucc_tl_ucp_task_reset(task, UCC_INPROGRESS);
     status =
@@ -209,21 +213,35 @@ ucc_status_t ucc_tl_ucp_allreduce_knomial_start(ucc_coll_task_t *coll_task)
 
 ucc_status_t ucc_tl_ucp_allreduce_knomial_init_common(ucc_tl_ucp_task_t *task)
 {
+    ucc_tl_ucp_team_t *team      = TASK_TEAM(task);
+    ucc_memory_type_t  mem_type  = TASK_ARGS(task).dst.info.mem_type;
     size_t             count     = TASK_ARGS(task).dst.info.count;
     ucc_datatype_t     dt        = TASK_ARGS(task).dst.info.datatype;
     size_t             data_size = count * ucc_dt_size(dt);
-    ucc_rank_t         size      = (ucc_rank_t)task->subset.map.ep_num;
-    ucc_kn_radix_t     radix =
-        ucc_min(TASK_LIB(task)->cfg.allreduce_kn_radix, size);
+    ucc_mrange_uint_t *p         = &team->cfg.allreduce_kn_radix;
+    ucc_sbgp_t        *sbgp;
+    ucc_rank_t         size;
+    ucc_kn_radix_t     radix, cfg_radix;
     ucc_status_t       status;
 
     task->super.flags    |= UCC_COLL_TASK_FLAG_EXECUTOR;
     task->super.post     = ucc_tl_ucp_allreduce_knomial_start;
     task->super.progress = ucc_tl_ucp_allreduce_knomial_progress;
     task->super.finalize = ucc_tl_ucp_allreduce_knomial_finalize;
-    status               = ucc_mc_alloc(&task->allreduce_kn.scratch_mc_header,
-                          (radix - 1) * data_size,
-                          TASK_ARGS(task).dst.info.mem_type);
+
+    if (!(task->flags & UCC_TL_UCP_TASK_FLAG_SUBSET) && team->cfg.use_reordering) {
+        sbgp = ucc_topo_get_sbgp(team->topo, UCC_SBGP_FULL_HOST_ORDERED);
+        task->subset.myrank = sbgp->group_rank;
+        task->subset.map    = sbgp->map;
+    }
+
+    size      = (ucc_rank_t)task->subset.map.ep_num;
+    cfg_radix = ucc_tl_ucp_get_radix_from_range(team, data_size, mem_type, p,
+                                                UCC_UUNITS_AUTO_RADIX);
+    radix     = ucc_min(cfg_radix, size);
+    status    = ucc_mc_alloc(&task->allreduce_kn.scratch_mc_header,
+                             (radix - 1) * data_size,
+                             TASK_ARGS(task).dst.info.mem_type);
     task->allreduce_kn.scratch = task->allreduce_kn.scratch_mc_header->addr;
     if (ucc_unlikely(status != UCC_OK)) {
         tl_error(UCC_TASK_LIB(task), "failed to allocate scratch buffer");

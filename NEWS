@@ -3,7 +3,191 @@
  *
  * See file LICENSE for terms.
  */
-## 1.0.0 (TBD)
+
+## Current
+
+## New Features and Enhancements
+
+### CL/HIER
+- Disable onesided alltoallv {PR #875}
+
+### TL/CUDA
+- Initialize remote CUDA scratch to NULL {PR #911}
+
+
+### TL/UCP
+- Enable hybrid alltoallv {PR #781}
+- Avoid copy in knomial scatter {PR #771}
+- Enable reorder ranks to reduce_scatter, Knomial Allreduce, Ring Allgather/v {PR #819}
+- Remove memcpy in last SRA step {PR #743}
+- Fix sparse pack in hybrid a2av {PR #825}
+- Fix recycle in hybrid a2av {PR #827}
+- Reorder ranks for SRA {PR #834}
+- Use ring allgather when reordering needed {PR #879}
+- Use pipelining in SRA allreduce for CUDA {PR #873}
+- Poll for onesided alltoall completion {PR #876}
+- Add support for non-host buffers in bruck alltoall {PR #852}
+- Added Neighbor Exchange Allgather{PR #822}
+
+### TL/SHARP
+- Enable bcast for any predefined dt {PR #774}
+- Don't print team create error {PR #777}
+- Check datasize supported {PR #776}
+- Fix sharp context cleanup {PR #843}
+
+### API
+- Remove duplicate get_version_string {PR #933}
+
+### TL/NCCL
+- Make team init non-blocking {PR #772}
+- Add CUDA managed to score {PR #793}
+- Make ncclGroupEnd nb {PR #798}
+- Lazy init nccl comm {PR #851}
+
+### TL/MLX5
+- Share ib_ctx and pd {PR #749}
+- Rcache {PR #753}
+- Device memory and topo init {PR #780}
+- Adding mcast interface {PR #784}
+- A2A part 1 -- coll init {PR #790}
+- A2A part 2 -- full collective {PR #802}
+- Revisit team and ctx init {PR #815}
+- Fix context create hang {PR #887}
+- Add librdmacm linkage {PR #910}
+
+### CORE
+- Fix score update when only score given {PR #779}
+- Coverity fixes {PR #809}
+- Additional coverty fixes {PR #813}
+- Fix error handling for ctx create epilog {PR #818}
+- Skip zero size collectives {PR #787}
+
+### DOCS
+- Updating NEWS for v1.2 {PR #791}
+- Updating NEWS for v1.3 {PR #937}
+
+### BUILD and TEST
+- Updated build system to enable UCC with ROCm 6.x {PR #906 and #917}
+- Check op and dt compatibility {PR #773}
+- Fix barrier test {PR #799}
+- Propagate HIP_CXXFLAGS to gtest and mpi {PR #803}
+
+
+
+## 1.2.0 (June 6th, 2023)
+
+## New Features and Enhancements
+
+## CL/HIER
+
+- Fixed single proc on node issue in alltoall ([#658](https://github.com/openucx/ucc/pull/658))
+- Implemented allreduce rab pipelined ([#608](https://github.com/openucx/ucc/pull/608))
+- Added bcast 2step algorithm ([#620](https://github.com/openucx/ucc/pull/620))
+- Fixed allreduce rab pipeline ([#759](https://github.com/openucx/ucc/pull/759))
+
+##  TL/CUDA
+
+- Support for CUDA 12
+- Fixed cache unmap issue ([#642](https://github.com/openucx/ucc/pull/642))
+- Implemented reduce scatter linear ([#669](https://github.com/openucx/ucc/pull/669))
+- Added algorithm selection based on topology ([#688](https://github.com/openucx/ucc/pull/688))
+- Fixed linear algorithms ([#751](https://github.com/openucx/ucc/pull/751))
+- Fixed pipelining in linear rs ([#770](https://github.com/openucx/ucc/pull/770))
+
+## TL/UCP
+
+- Added special service worker ([#560](https://github.com/openucx/ucc/pull/560))
+- Added scatterv ([#663](https://github.com/openucx/ucc/pull/663))
+- Added gatherv ([#664](https://github.com/openucx/ucc/pull/664))
+- Fixed running with npolls 0 ([#695](https://github.com/openucx/ucc/pull/695))
+- Added knomial allgather ([#729](https://github.com/openucx/ucc/pull/729))
+- Fixed bug for triggered colls ([#757](https://github.com/openucx/ucc/pull/757))
+- Added bruck alltoall ([#756](https://github.com/openucx/ucc/pull/756))
+- Added SLOAV alltoallv ([#687](https://github.com/openucx/ucc/pull/687))
+- Large message broadcast optimizations ([#738](https://github.com/openucx/ucc/pull/738))
+- Ranks reordering in ring allgather for better locality([#69](https://github.com/openucx/ucc/pull/698))
+
+##  TL/SHARP
+
+- Fixed memory type check in allreduce ([#662](https://github.com/openucx/ucc/pull/662))
+- Added support for sharpv3 dt ([#661](https://github.com/openucx/ucc/pull/661))
+- Fixed assert check ([#686](https://github.com/openucx/ucc/pull/686))
+- Implemented SHARP OOB fixes ([#746](https://github.com/openucx/ucc/pull/746))
+- Fixed local rank when NODE SBGP not enabled ([#760](https://github.com/openucx/ucc/pull/760))
+- Prevented sharp team with team max ppn > 1 ([#761](https://github.com/openucx/ucc/pull/761))
+
+
+## CORE
+
+- Fixed memory type score update ([#650](https://github.com/openucx/ucc/pull/650))
+- Fixed ucc parser build ([#666](https://github.com/openucx/ucc/pull/666))
+- Implemented ucc_pipeline_params ([#675](https://github.com/openucx/ucc/pull/675))
+- Changed log level of config_modify ([#667](https://github.com/openucx/ucc/pull/667))
+- Fixed timeout handle for triggered post ([#679](https://github.com/openucx/ucc/pull/679))
+
+## DOCS
+- Added User Guide ([#720](https://github.com/openucx/ucc/pull/720))
+
+
+## 1.1.0 (October 7th, 2022)
+
+## Features
+
+## API
+- Added float 128 and float 32, 64, 128 (complex) data types
+- Added Active Sets based collectives to support dynamic groups as well as
+  point-to-point messaging
+- Added ucc_team_get_attr interface
+
+## Core
+- Config file support
+- Fixed component search
+
+## CL
+
+- Added split rail allreduce collective implementation
+- Enable hierarchical alltoallv and barrier
+- Fixed cleanup bugs
+
+
+## TL
+- Added SELF TL supporting team size one
+
+### UCP
+
+- Added service broadcast
+- Added reduce_scatterv ring algorithm
+- Added k-nomial based gather collective implementation
+- Added one-sided get based algorithms
+
+### SHARP
+- Fixed SHARP OOB
+- Added SHARP broadcast
+
+
+
+### GPU Collectives (CUDA, NCCL TL and RCCL TL)
+- Added support for CUDA TL (intranode collectives for NVIDIA GPUs)
+- Added multiring allgatherv, alltoall, reduce-scatter, and reduce-scatterv
+  multiring in CUDA TL
+- Added topo based ring construction in CUDA TL to maximize bandwidth
+- Added NCCL gather, scatter and its vector variant
+- Enable using multiple streams for collectives
+- Added support for RCCL gather (v), scatter (v), broadcast, allgather (v),
+  barrier, alltoall (v) and all reduce collectives
+- Added ROCm memory component
+- Adapted all GPU collectives to executor design
+
+
+### Tests
+- Added tests for triggered collectives in perftests
+- Fixed bugs in multi-threading tests
+
+### Utils
+- Added CPU model and vendor detection
+- Several bug fixes in all components
+
+## 1.0.0 (April 19th, 2022)
 
 ### Features
 

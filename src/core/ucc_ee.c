@@ -1,5 +1,6 @@
 /**
- * Copyright (c) 2021, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2021-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *
  * See file LICENSE for terms.
  */
 
@@ -38,15 +39,14 @@ ucc_status_t ucc_ee_create(ucc_team_h team, const ucc_ee_params_t *params,
     ucc_queue_head_init(&ee->event_out_queue);
     *ee_p = ee;
 
-    ucc_info("ee is created: %p ee_context: %p",
-              ee, params->ee_context);
+    ucc_debug("ee is created: %p ee_context: %p", ee, params->ee_context);
 
     return UCC_OK;
 }
 
 ucc_status_t ucc_ee_destroy(ucc_ee_h ee)
 {
-    ucc_info("ee is destroyed: %p", ee);
+    ucc_debug("ee is destroyed: %p", ee);
     ucc_spinlock_destroy(&ee->lock);
     ucc_free(ee);
 
@@ -67,13 +67,13 @@ ucc_status_t ucc_ee_get_event_internal(ucc_ee_h ee, ucc_ev_t **ev, ucc_queue_hea
     elem = ucc_queue_pull(queue);
     ucc_spin_unlock(&ee->lock);
 
-    ucc_assert(elem);
+    ucc_assert(elem != NULL);
 
     event_desc = ucc_container_of(elem, ucc_event_desc_t, queue);
     *ev = &event_desc->ev;
 
-    ucc_info("EE Event Get. ee:%p, queue:%p ev_type:%s ",
-                ee, queue, ucc_ee_ev_names[event_desc->ev.ev_type]);
+    ucc_debug("EE Event Get. ee:%p, queue:%p ev_type:%s ",
+              ee, queue, ucc_ee_ev_names[event_desc->ev.ev_type]);
     return UCC_OK;
 }
 
@@ -108,8 +108,8 @@ ucc_status_t ucc_ee_set_event_internal(ucc_ee_h ee, ucc_ev_t *ev, ucc_queue_head
     ucc_spin_lock(&ee->lock);
     ucc_queue_push(queue, &event_desc->queue);
     ucc_spin_unlock(&ee->lock);
-    ucc_info("EE Event Set. ee:%p, queue:%p ev_type:%s ",
-                ee, queue, ucc_ee_ev_names[ev->ev_type]);
+    ucc_debug("EE Event Set. ee:%p, queue:%p ev_type:%s ",
+              ee, queue, ucc_ee_ev_names[ev->ev_type]);
 
     return UCC_OK;
 }

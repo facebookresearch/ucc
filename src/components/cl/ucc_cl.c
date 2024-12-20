@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2020, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2024, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  *
  * See file LICENSE for terms.
  */
@@ -30,10 +30,11 @@ ucc_config_field_t ucc_cl_context_config_table[] = {
 };
 
 const char *ucc_cl_names[] = {
-    [UCC_CL_BASIC] = "basic",
-    [UCC_CL_HIER]  = "hier",
-    [UCC_CL_ALL]   = "all",
-    [UCC_CL_LAST]  = NULL
+    [UCC_CL_BASIC]      = "basic",
+    [UCC_CL_HIER]       = "hier",
+    [UCC_CL_DOCA_UROM]  = "doca_urom",
+    [UCC_CL_ALL]        = "all",
+    [UCC_CL_LAST]       = NULL
 };
 
 UCC_CLASS_INIT_FUNC(ucc_cl_lib_t, ucc_cl_iface_t *cl_iface,
@@ -42,7 +43,8 @@ UCC_CLASS_INIT_FUNC(ucc_cl_lib_t, ucc_cl_iface_t *cl_iface,
     ucc_status_t status;
 
     UCC_CLASS_CALL_BASE_INIT();
-    self->iface         = cl_iface;
+    self->iface               = cl_iface;
+    self->super.use_tuning    = cl_config->super.use_tuning;
     self->super.log_component = cl_config->super.log_component;
     ucc_strncpy_safe(self->super.log_component.name,
                      cl_iface->cl_lib_config.name,

@@ -8,6 +8,7 @@
 
 using Param_0 = std::tuple<int, ucc_datatype_t, ucc_memory_type_t, int, int>;
 using Param_1 = std::tuple<ucc_datatype_t, ucc_memory_type_t, int, int>;
+using Param_2 = std::tuple<ucc_memory_type_t, ucc_job_env_t, int, int>;
 
 class test_bcast : public UccCollArgs, public ucc::test
 {
@@ -58,10 +59,16 @@ public:
     {
         for (auto r = 0; r < ctxs.size(); r++) {
             ucc_coll_args_t *coll  = ctxs[r]->args;
-            size_t           count = coll->dst.info.count;
-            ucc_datatype_t   dtype = coll->dst.info.datatype;
-            clear_buffer(coll->dst.info.buffer, count * ucc_dt_size(dtype),
-                         mem_type, 0);
+            size_t           count = coll->src.info.count;
+            ucc_datatype_t   dtype = coll->src.info.datatype;
+            if (r != root) {
+                clear_buffer(coll->src.info.buffer, count * ucc_dt_size(dtype),
+                             mem_type, 0);
+            } else {
+                UCC_CHECK(ucc_mc_memcpy(coll->src.info.buffer, ctxs[r]->init_buf,
+                                        ctxs[r]->rbuf_size, mem_type,
+                                        UCC_MEMORY_TYPE_HOST));
+            }
         }
     }
 
@@ -176,7 +183,8 @@ INSTANTIATE_TEST_CASE_P(
         ::testing::Range(1, UccJob::nStaticTeams), // team_ids
         PREDEFINED_DTYPES,
 #ifdef HAVE_CUDA
-        ::testing::Values(UCC_MEMORY_TYPE_HOST, UCC_MEMORY_TYPE_CUDA),
+        ::testing::Values(UCC_MEMORY_TYPE_HOST, UCC_MEMORY_TYPE_CUDA,
+                          UCC_MEMORY_TYPE_CUDA_MANAGED),
 #else
         ::testing::Values(UCC_MEMORY_TYPE_HOST),
 #endif
@@ -226,9 +234,57 @@ INSTANTIATE_TEST_CASE_P(
     ::testing::Combine(
         PREDEFINED_DTYPES,
 #ifdef HAVE_CUDA
-        ::testing::Values(UCC_MEMORY_TYPE_HOST, UCC_MEMORY_TYPE_CUDA),
+        ::testing::Values(UCC_MEMORY_TYPE_HOST, UCC_MEMORY_TYPE_CUDA,
+                          UCC_MEMORY_TYPE_CUDA_MANAGED),
 #else
         ::testing::Values(UCC_MEMORY_TYPE_HOST),
 #endif
         ::testing::Values(1,3,65536), // count
         ::testing::Values(0,1))); // root
+
+class test_bcast_alg : public test_bcast,
+        public ::testing::WithParamInterface<Param_2>
+{};
+
+UCC_TEST_P(test_bcast_alg,) {
+    const ucc_memory_type_t mt      = std::get<0>(GetParam());
+    const ucc_job_env_t     env     = std::get<1>(GetParam());
+    const int               count   = std::get<2>(GetParam());
+    const int               n_procs = std::get<3>(GetParam());
+    UccJob                  job(n_procs, UccJob::UCC_JOB_CTX_GLOBAL, env);
+    UccTeam_h               team    = job.create_team(n_procs);
+    int                     repeat  = 1;
+    UccCollCtxVec ctxs;
+
+    SET_MEM_TYPE(mt);
+    for (int root = 0; root < n_procs; root++) {
+        this->set_root(root);
+        this->data_init(n_procs, UCC_DT_INT8, count, ctxs, false);
+        UccReq req(team, ctxs);
+
+        for (auto i = 0; i < repeat; i++) {
+            req.start();
+            req.wait();
+            EXPECT_EQ(true, this->data_validate(ctxs));
+            this->reset(ctxs);
+        }
+        this->data_fini(ctxs);
+    }
+}
+
+ucc_job_env_t two_step_env = {{"UCC_CL_HIER_TUNE", "bcast:@2step:0-inf:inf"},
+                              {"UCC_CLS", "all"}};
+ucc_job_env_t dbt_env      = {{"UCC_TL_UCP_TUNE", "bcast:@dbt:0-inf:inf"},
+                              {"UCC_CLS", "basic"}};
+INSTANTIATE_TEST_CASE_P(
+    , test_bcast_alg,
+    ::testing::Combine(
+#ifdef HAVE_CUDA
+        ::testing::Values(UCC_MEMORY_TYPE_HOST, UCC_MEMORY_TYPE_CUDA,
+                          UCC_MEMORY_TYPE_CUDA_MANAGED),
+#else
+        ::testing::Values(UCC_MEMORY_TYPE_HOST),
+#endif
+        ::testing::Values(two_step_env, dbt_env), //env
+        ::testing::Values(8, 65536), // count
+        ::testing::Values(15,16))); // n_procs

@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2001-2014, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2001-2022, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # Copyright (c) UT-Battelle, LLC. 2017. ALL RIGHTS RESERVED.
 # Copyright (C) ARM Ltd. 2016-2020.  ALL RIGHTS RESERVED.
 # See file LICENSE for terms.
@@ -58,7 +58,7 @@ AC_DEFUN([CHECK_SPECIFIC_ATTRIBUTE], [
         #
         # Try to compile using the C compiler
         #
-        AC_TRY_COMPILE([$3],[],
+        AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[$3]],[[]])],
                        [ucx_cv_attribute_[$1]=1],
                        [ucx_cv_attribute_[$1]=0])
 	CFLAGS="$SAVE_CFLAGS"
@@ -73,7 +73,7 @@ AC_DEFUN([CHECK_SPECIFIC_ATTRIBUTE], [
 #  Enable/disable turning on machine-specific optimizations
 #
 AC_ARG_ENABLE(optimizations,
-              AC_HELP_STRING([--enable-optimizations],
+              AS_HELP_STRING([--enable-optimizations],
                              [Enable non-portable machine-specific CPU optimizations, default: NO]),
               [],
               [enable_optimizations=no])
@@ -88,7 +88,7 @@ AC_ARG_ENABLE(optimizations,
 AC_DEFUN([COMPILER_CPU_OPTIMIZATION],
 [
     AC_ARG_WITH([$1],
-                [AC_HELP_STRING([--with-$1], [Use $2 compiler option.])],
+                [AS_HELP_STRING([--with-$1], [Use $2 compiler option.])],
                 [],
                 [with_$1=$enable_optimizations])
 
@@ -445,12 +445,15 @@ AC_LANG_POP
 # --diag_suppress 1215 - Suppress deprecated API warning for PGI18 compiler
 # --diag_suppress 1901 - Use of a const variable in a constant expression is nonstandard in C
 # --diag_suppress 1902 - Use of a const variable in a constant expression is nonstandard in C (same as 1901)
+# --diag_suppress 301  - Suppress typedef name has already been declared (with same type) [duplicate_typedef]
+
 ADD_COMPILER_FLAGS_IF_SUPPORTED([[--display_error_number],
                                  [--diag_suppress 181],
                                  [--diag_suppress 381],
                                  [--diag_suppress 1215],
                                  [--diag_suppress 1901],
-                                 [--diag_suppress 1902]],
+                                 [--diag_suppress 1902],
+                                 [--diag_suppress 301]],
                                 [AC_LANG_SOURCE([[int main(int argc, char **argv){return 0;}]])])
 
 

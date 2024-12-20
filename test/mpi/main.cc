@@ -1,7 +1,16 @@
+/**
+ * Copyright (c) 2021-2024, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) Advanced Micro Devices, Inc. 2023. ALL RIGHTS RESERVED.
+ *
+ * See file LICENSE for terms.
+ */
+
 #include <getopt.h>
 #include <sstream>
-#include "test_mpi.h"
+#include <algorithm>
 #include <chrono>
+#include <iomanip>
+#include "test_mpi.h"
 
 int test_rand_seed = -1;
 static size_t test_max_size = TEST_UCC_RANK_BUF_SIZE_MAX;
@@ -15,31 +24,45 @@ static std::vector<ucc_coll_type_t> colls = {
     UCC_COLL_TYPE_REDUCE_SCATTER, UCC_COLL_TYPE_REDUCE_SCATTERV,
     UCC_COLL_TYPE_GATHER,         UCC_COLL_TYPE_GATHERV,
     UCC_COLL_TYPE_SCATTER,        UCC_COLL_TYPE_SCATTERV};
-static std::vector<ucc_coll_type_t> onesided_colls = {UCC_COLL_TYPE_ALLTOALL};
-static std::vector<ucc_memory_type_t> mtypes = {UCC_MEMORY_TYPE_HOST};
-static std::vector<ucc_datatype_t>    dtypes         = {
+
+static std::vector<ucc_coll_type_t> onesided_colls = {
+    UCC_COLL_TYPE_ALLTOALL, UCC_COLL_TYPE_ALLTOALLV};
+
+static std::vector<ucc_memory_type_t> mtypes = {
+    UCC_MEMORY_TYPE_HOST};
+
+static std::vector<ucc_datatype_t> dtypes = {
     UCC_DT_INT16,   UCC_DT_INT32,   UCC_DT_INT64,
     UCC_DT_UINT16,  UCC_DT_UINT32,  UCC_DT_UINT64,
     UCC_DT_FLOAT32, UCC_DT_FLOAT64, UCC_DT_FLOAT64_COMPLEX};
-static std::vector<ucc_reduction_op_t>     ops    = {UCC_OP_SUM, UCC_OP_MAX,
-                                              UCC_OP_AVG};
-static std::vector<ucc_test_mpi_team_t> teams = {TEAM_WORLD, TEAM_REVERSE,
-                                                 TEAM_SPLIT_HALF, TEAM_SPLIT_ODD_EVEN};
-static std::vector<ucc_test_vsize_flag_t> counts_vsize = {TEST_FLAG_VSIZE_32BIT,
-                                                          TEST_FLAG_VSIZE_64BIT};
-static std::vector<ucc_test_vsize_flag_t> displs_vsize = {TEST_FLAG_VSIZE_32BIT,
-                                                          TEST_FLAG_VSIZE_64BIT};
-static size_t msgrange[3] = {8, (1ULL << 21), 8};
-static std::vector<ucc_test_mpi_inplace_t> inplace = {TEST_NO_INPLACE};
-static std::vector<bool> triggered = {false};
-static ucc_test_mpi_root_t root_type = ROOT_RANDOM;
-static int root_value = 10;
-static ucc_thread_mode_t                   thread_mode  = UCC_THREAD_SINGLE;
-static int                                 iterations   = 1;
-static int                                 show_help    = 0;
-static int                                 num_tests    = 1;
-static bool                                has_onesided = true;
-static bool                                verbose      = false;
+
+static std::vector<ucc_reduction_op_t> ops = {
+    UCC_OP_SUM, UCC_OP_MAX, UCC_OP_AVG};
+
+static std::vector<ucc_test_mpi_team_t> teams = {
+    TEAM_WORLD, TEAM_REVERSE, TEAM_SPLIT_HALF, TEAM_SPLIT_ODD_EVEN};
+
+static std::vector<ucc_test_vsize_flag_t> counts_vsize = {
+    TEST_FLAG_VSIZE_32BIT, TEST_FLAG_VSIZE_64BIT};
+
+static std::vector<ucc_test_vsize_flag_t> displs_vsize = {
+    TEST_FLAG_VSIZE_32BIT, TEST_FLAG_VSIZE_64BIT};
+
+static size_t msgrange[3] = {
+    8, (1ULL << 21), 8};
+
+static std::vector<bool>   inplace      = {false};
+static std::vector<bool>   persistent   = {false};
+static std::vector<bool>   triggered    = {false};
+static ucc_test_mpi_root_t root_type    = ROOT_RANDOM;
+static int                 root_value   = 10;
+static ucc_thread_mode_t   thread_mode  = UCC_THREAD_SINGLE;
+static int                 iterations   = 1;
+static int                 show_help    = 0;
+static int                 num_tests    = 1;
+static bool                has_onesided = true;
+static bool                verbose      = false;
+
 #if defined(HAVE_CUDA) || defined(HAVE_HIP)
 extern test_set_gpu_device_t test_gpu_set_device;
 #endif
@@ -60,17 +83,18 @@ static std::vector<std::string> str_split(const char *value, const char *delimit
     return rst;
 }
 
-void PrintHelp()
+void print_help()
 {
     std::cout <<
        "-c, --colls            <c1,c2,..>\n\tlist of collectives: "
             "barrier, allreduce, allgather, allgatherv, bcast, alltoall, alltoallv "
             "reduce, reduce_scatter, reduce_scatterv, gather, gatherv, scatter, scatterv\n\n"
        "-t, --teams            <t1,t2,..>\n\tlist of teams: world,half,reverse,odd_even\n\n"
-       "-M, --mtypes           <m1,m2,..>\n\tlist of mtypes: host,cuda,rocm\n\n"
+       "-M, --mtypes           <m1,m2,..>\n\tlist of mtypes: host,cuda,cudaManaged,rocm\n\n"
        "-d, --dtypes           <d1,d2,..>\n\tlist of dtypes: (u)int8(16,32,64),float32(64,128),float32(64,128)_complex\n\n"
        "-o, --ops              <o1,o2,..>\n\tlist of ops:sum,prod,max,min,land,lor,lxor,band,bor,bxor\n\n"
        "-I, --inplace          <value>\n\t0 - no inplace, 1 - inplace, 2 - both\n\n"
+       "-P, --persistent       <value>\n\t0 - no persistent, 1 - persistent, 2 - both\n\n"
        "-m, --msgsize          <min:max[:power]>\n\tmesage sizes range\n\n"
        "-r, --root             <type:[value]>\n\ttype of root selection: single:<value>, random:<value>, all\n\n"
        "-s, --seed             <value>\n\tuser defined random seed\n\n"
@@ -112,6 +136,23 @@ static ucc_test_mpi_team_t team_str_to_type(std::string team)
     throw std::string("incorrect team type: ") + team;
 }
 
+static std::string team_type_to_str(ucc_test_mpi_team_t team)
+{
+    switch (team) {
+    case TEAM_WORLD:
+        return "world";
+    case TEAM_SPLIT_HALF:
+        return "half";
+    case TEAM_SPLIT_ODD_EVEN:
+        return "odd_even";
+    case TEAM_REVERSE:
+        return "reverse";
+    default:
+        break;
+    }
+    throw std::string("incorrect team type: ");
+}
+
 static ucc_coll_type_t coll_str_to_type(std::string coll)
 {
     if (coll == "barrier") {
@@ -145,10 +186,8 @@ static ucc_coll_type_t coll_str_to_type(std::string coll)
     } else if (coll == "scatterv") {
         return UCC_COLL_TYPE_SCATTERV;
     } else {
-        std::cerr << "incorrect coll type: " << coll << std::endl;
-        PrintHelp();
+        throw std::string("incorrect coll type: ") + coll;
     }
-    throw std::string("incorrect coll type: ") + coll;
 }
 
 static ucc_memory_type_t mtype_str_to_type(std::string mtype)
@@ -157,6 +196,8 @@ static ucc_memory_type_t mtype_str_to_type(std::string mtype)
         return UCC_MEMORY_TYPE_HOST;
     } else if (mtype == "cuda") {
         return UCC_MEMORY_TYPE_CUDA;
+    } else if (mtype == "cudaManaged") {
+        return UCC_MEMORY_TYPE_CUDA_MANAGED;
     } else if (mtype == "rocm") {
         return UCC_MEMORY_TYPE_ROCM;
     }
@@ -270,18 +311,37 @@ static void process_inplace(const char *arg)
     int value = std::stoi(arg);
     switch(value) {
     case 0:
-        inplace = {TEST_NO_INPLACE};
+        inplace = {false};
         return;
     case 1:
-        inplace = {TEST_INPLACE};
+        inplace = {true};
         return;
     case 2:
-        inplace = {TEST_NO_INPLACE, TEST_INPLACE};
+        inplace = {false, true};
         return;
     default:
         break;
     }
     throw std::string("incorrect inplace: ") + arg;
+}
+
+static void process_persistent(const char *arg)
+{
+    int value = std::stoi(arg);
+    switch(value) {
+    case 0:
+        persistent = {false};
+        return;
+    case 1:
+        persistent = {true};
+        return;
+    case 2:
+        persistent = {false, true};
+        return;
+    default:
+        break;
+    }
+    throw std::string("incorrect persistent: ") + arg;
 }
 
 static void process_triggered(const char *arg)
@@ -350,23 +410,60 @@ int init_rand_seed(int user_seed)
     return seed;
 }
 
-void PrintInfo()
+void print_info()
 {
     int world_rank;
-    MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
 
+    MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
     if (world_rank) {
         return;
     }
-    std::cout << "\n===== UCC MPI TEST INFO =======\n"
-              << "   seed        : " << std::to_string(test_rand_seed) << "\n"
-              <<   "===============================\n"
-              << std::endl;
+
+    std::cout << "===== UCC MPI TEST INFO =======" << std::endl;
+    std::cout <<"seed:         " << std::to_string(test_rand_seed) << std::endl;
+    std::cout <<"collectives:  ";
+    for (const auto &c : colls) {
+        std::cout << ucc_coll_type_str(c);
+        if (c != colls.back()) {
+            std::cout << ", ";
+        } else {
+            std::cout << std::endl;
+        }
+    }
+    std::cout <<"data types:   ";
+    for (const auto &d : dtypes) {
+        std::cout << ucc_datatype_str(d);
+        if (d != dtypes.back()) {
+            std::cout << ", ";
+        } else {
+            std::cout << std::endl;
+        }
+    }
+
+    std::cout <<"memory types: ";
+    for (const auto &m : mtypes) {
+        std::cout << ucc_mem_type_str(m);
+        if (m != mtypes.back()) {
+            std::cout << ", ";
+        } else {
+            std::cout << std::endl;
+        }
+    }
+
+    std::cout <<"teams:        ";
+    for (const auto &t : teams) {
+        std::cout << team_type_to_str(t);
+        if (t != teams.back()) {
+            std::cout << ", ";
+        } else {
+            std::cout << std::endl;
+        }
+    }
 }
 
 void ProcessArgs(int argc, char** argv)
 {
-    const char *const short_opts  = "c:t:m:d:o:M:I:N:r:s:C:D:i:Z:G:ThvS:O:";
+    const char *const short_opts  = "c:t:m:d:o:M:I:P:N:r:s:C:D:i:Z:G:ThvS:O:";
     const option      long_opts[] = {
                                 {"colls", required_argument, nullptr, 'c'},
                                 {"teams", required_argument, nullptr, 't'},
@@ -375,6 +472,7 @@ void ProcessArgs(int argc, char** argv)
                                 {"ops", required_argument, nullptr, 'o'},
                                 {"msgsize", required_argument, nullptr, 'm'},
                                 {"inplace", required_argument, nullptr, 'I'},
+                                {"persistent", required_argument, nullptr, 'P'},
                                 {"root", required_argument, nullptr, 'r'},
                                 {"seed", required_argument, nullptr, 's'},
                                 {"max_size", required_argument, nullptr, 'Z'},
@@ -422,6 +520,9 @@ void ProcessArgs(int argc, char** argv)
             break;
         case 'I':
             process_inplace(optarg);
+            break;
+        case 'P':
+            process_persistent(optarg);
             break;
         case 'G':
             process_triggered(optarg);
@@ -473,17 +574,21 @@ void ProcessArgs(int argc, char** argv)
 
 int main(int argc, char *argv[])
 {
-    std::chrono::steady_clock::time_point begin =
-        std::chrono::steady_clock::now();
     int failed = 0;
+    int total_done_skipped_failed[ucc_ilog2(UCC_COLL_TYPE_LAST) + 1][4];
+    std::chrono::steady_clock::time_point begin;
     int size, required, provided, completed, rank;
     UccTestMpi *test;
     MPI_Request req;
     std::string err;
 
+    begin = std::chrono::steady_clock::now();
+    memset(total_done_skipped_failed, 0,
+           sizeof(total_done_skipped_failed));
     try {
         ProcessArgs(argc, argv);
     } catch (const std::string &s) {
+        failed = 1;
         err = s;
     }
     required = (thread_mode == UCC_THREAD_SINGLE) ? MPI_THREAD_SINGLE
@@ -499,7 +604,7 @@ int main(int argc, char *argv[])
     if (!err.empty() || show_help) {
         if (rank == 0) {
             std::cerr << "ParseArgs error:" << err << "\n\n";
-            PrintHelp();
+            print_help();
         }
         goto mpi_exit;
     }
@@ -540,62 +645,124 @@ int main(int argc, char *argv[])
     test->set_max_size(test_max_size);
     test_rand_seed = init_rand_seed(test_rand_seed);
 
-    PrintInfo();
+    print_info();
 
-    for (auto &inpl : inplace) {
-        for (auto trig: triggered) {
-            test->set_triggered(trig);
-            test->set_inplace(inpl);
-            test->run_all();
+    for (auto inpl : inplace) {
+        for (auto pers : persistent) {
+            for (auto trig: triggered) {
+                test->set_triggered(trig);
+                test->set_inplace(inpl);
+                test->set_persistent(pers);
+                test->run_all();
+            }
         }
     }
 
     if (has_onesided) {
-        test->set_colls(onesided_colls);
-        for (auto &inpl : inplace) {
-            test->set_triggered(false);
-            test->set_inplace(inpl);
-            test->run_all(true);
+        std::vector<ucc_coll_type_t>           os_colls(onesided_colls.size());
+        std::vector<ucc_coll_type_t>::iterator it_start;
+
+        std::sort(colls.begin(), colls.end());
+        std::sort(onesided_colls.begin(), onesided_colls.end());
+
+        it_start = std::set_intersection(
+            colls.begin(), colls.end(), onesided_colls.begin(),
+            onesided_colls.end(), os_colls.begin());
+        os_colls.resize(it_start - os_colls.begin());
+        test->set_colls(os_colls);
+        for (auto inpl : inplace) {
+            for (auto pers : persistent) {
+                test->set_triggered(false);
+                test->set_inplace(inpl);
+                test->set_persistent(pers);
+                test->run_all(true);
+            }
         }
     }
-
     std::cout << std::flush;
-    MPI_Iallreduce(MPI_IN_PLACE, test->results.data(), test->results.size(),
-                   MPI_INT, MPI_MIN, MPI_COMM_WORLD, &req);
+
+    for (auto s : test->results) {
+        int coll_num = ucc_ilog2(std::get<0>(s));
+        switch(std::get<1>(s)) {
+        case UCC_OK:
+            total_done_skipped_failed[coll_num][1]++;
+            break;
+        case UCC_ERR_NOT_IMPLEMENTED:
+        case UCC_ERR_LAST:
+            total_done_skipped_failed[coll_num][2]++;
+            break;
+        default:
+            total_done_skipped_failed[coll_num][3]++;
+        }
+        total_done_skipped_failed[coll_num][0]++;
+    }
+    MPI_Iallreduce(MPI_IN_PLACE, total_done_skipped_failed,
+                   sizeof(total_done_skipped_failed)/sizeof(int),
+                   MPI_INT, MPI_MAX, MPI_COMM_WORLD, &req);
     do {
         MPI_Test(&req, &completed, MPI_STATUS_IGNORE);
         test->progress_ctx();
     } while(!completed);
 
-    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-
     if (0 == rank) {
         std::chrono::steady_clock::time_point end =
             std::chrono::steady_clock::now();
-        int skipped = 0;
-        int done = 0;
-        for (auto s : test->results) {
-            switch(s) {
-            case UCC_OK:
-                done++;
-                break;
-            case UCC_ERR_NOT_IMPLEMENTED:
-            case UCC_ERR_LAST:
-                skipped++;
-                break;
-            default:
-                failed++;
-            }
-        }
+        ucc_coll_type_t coll_type;
+        int num_all = 0, num_skipped = 0, num_done =0, num_failed = 0;
+        std::ios iostate(nullptr);
+
+        iostate.copyfmt(std::cout);
         std::cout << "\n===== UCC MPI TEST REPORT =====\n" <<
-            "   total tests : " << test->results.size() << "\n" <<
-            "   passed      : " << done << "\n" <<
-            "   skipped     : " << skipped << "\n" <<
-            "   failed      : " << failed << "\n" <<
-            "   elapsed     : " <<
+            std::setw(22) << std::left << "collective" <<
+            std::setw(10) << std::right << "tests" <<
+            std::setw(10) << std::right << "passed" <<
+            std::setw(10) << std::right << "failed" <<
+            std::setw(10) << std::right << "skipped" << std::endl;
+
+        for (coll_type =  (ucc_coll_type_t)1;
+             coll_type < UCC_COLL_TYPE_LAST;
+             coll_type = (ucc_coll_type_t)(coll_type << 1))
+        {
+            int coll_num = ucc_ilog2(coll_type);
+            if (total_done_skipped_failed[coll_num][0] == 0) {
+                continue;
+            }
+            num_all += total_done_skipped_failed[coll_num][0];
+            num_done += total_done_skipped_failed[coll_num][1];
+            num_skipped += total_done_skipped_failed[coll_num][2];
+            num_failed += total_done_skipped_failed[coll_num][3];
+            std::cout <<
+                std::setw(22) << std::left << ucc_coll_type_str(coll_type) <<
+                std::setw(10) << std::right << total_done_skipped_failed[coll_num][0] <<
+                std::setw(10) << std::right << total_done_skipped_failed[coll_num][1] <<
+                std::setw(10) << std::right << total_done_skipped_failed[coll_num][3] <<
+                std::setw(10) << std::right << total_done_skipped_failed[coll_num][2] <<
+                std::endl;
+
+        }
+        std::cout <<
+            " \n===== UCC MPI TEST SUMMARY =====\n" <<
+            "total tests:  " << num_all << "\n" <<
+            "passed:       " << num_done << "\n" <<
+            "skipped:      " << num_skipped << "\n" <<
+            "failed:       " << num_failed << "\n" <<
+            "elapsed:      " <<
             std::chrono::duration_cast<std::chrono::seconds>(end - begin).count()
                   << "s" << std::endl;
+        std::cout.copyfmt(iostate);
+
+        /* check if all tests have been skipped */
+        if (num_all == num_skipped) {
+            std::cout << "\n All tests have been skipped, indicating most likely "
+                         "a problem\n";
+            failed = 1;
+        }
+
+        if (num_failed != 0) {
+            failed = 1;
+        }
     }
+
 test_exit:
     delete test;
 mpi_exit:

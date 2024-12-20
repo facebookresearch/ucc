@@ -1,6 +1,6 @@
 /**
  * Copyright (c) 2021, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
- * Copyright (C) Advanced Micro Devices, Inc. 2022. ALL RIGHTS RESERVED.
+ * Copyright (C) Advanced Micro Devices, Inc. 2022-2023. ALL RIGHTS RESERVED.
  *
  * See file LICENSE for terms.
  */
@@ -10,26 +10,21 @@
 
 #include "components/ec/base/ucc_ec_base.h"
 #include "components/ec/ucc_ec_log.h"
+#include "core/ucc_ee.h"
 #include "utils/ucc_mpool.h"
 #include "utils/arch/rocm_def.h"
+
 #include <hip/hip_runtime.h>
 #include <hip/hip_runtime_api.h>
 #include <hip/hip_complex.h>
-#include <hip_fp16.h>
-#include <hip_bfloat16.h>
+#include <hip/hip_bfloat16.h>
 
-typedef enum ucc_ec_rocm_strm_task_mode {
-    UCC_EC_ROCM_TASK_KERNEL,
-    UCC_EC_ROCM_TASK_MEM_OPS,
-    UCC_EC_ROCM_TASK_AUTO,
-    UCC_EC_ROCM_TASK_LAST,
-} ucc_ec_rocm_strm_task_mode_t;
-
-typedef enum ucc_ec_rocm_task_stream_type {
-    UCC_EC_ROCM_USER_STREAM,
-    UCC_EC_ROCM_INTERNAL_STREAM,
-    UCC_EC_ROCM_TASK_STREAM_LAST
-} ucc_ec_rocm_task_stream_type_t;
+#pragma GCC diagnostic push
+#if defined(__clang__)
+#pragma GCC diagnostic ignored "-Wunknown-warning-option"
+#endif
+#include <hip/hip_fp16.h>
+#pragma GCC diagnostic pop
 
 typedef enum ucc_ec_task_status {
     UCC_EC_ROCM_TASK_COMPLETED,
@@ -71,15 +66,14 @@ typedef ucc_status_t (*ucc_ec_rocm_task_post_fn) (uint32_t *dev_status,
 
 typedef struct ucc_ec_rocm_config {
     ucc_ec_config_t                super;
-    ucc_ec_rocm_strm_task_mode_t   strm_task_mode;
-    ucc_ec_rocm_task_stream_type_t task_strm_type;
-    int                            stream_blocking_wait;
     unsigned long                  exec_num_workers;
     unsigned long                  exec_num_threads;
     unsigned long                  exec_max_tasks;
     unsigned long                  exec_num_streams;
     unsigned long                  reduce_num_blocks;
     int                            reduce_num_threads;
+    int                            reduce_host_limit;
+    int                            copy_host_limit;
 } ucc_ec_rocm_config_t;
 
 typedef struct ucc_ec_rocm {
@@ -93,10 +87,8 @@ typedef struct ucc_ec_rocm {
     ucc_mpool_t                    executors;
     ucc_mpool_t                    executor_interruptible_tasks;
     ucc_thread_mode_t              thread_mode;
-    ucc_ec_rocm_strm_task_mode_t   strm_task_mode;
-    ucc_ec_rocm_task_stream_type_t task_strm_type;
-    ucc_ec_rocm_task_post_fn       post_strm_task;
     ucc_spinlock_t                 init_spinlock;
+    ucc_ee_executor_t             *cpu_executor;
 } ucc_ec_rocm_t;
 
 typedef struct ucc_rocm_ec_event {

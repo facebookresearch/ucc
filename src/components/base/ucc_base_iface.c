@@ -1,3 +1,9 @@
+/**
+ * Copyright (c) 2022-2024, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *
+ * See file LICENSE for terms.
+ */
+
 #include "ucc_base_iface.h"
 #include "utils/ucc_malloc.h"
 #include "utils/ucc_log.h"
@@ -8,7 +14,17 @@ ucc_config_field_t ucc_base_lib_config_table[] = {
      "selected will be printed.\n"
      "Possible values are: fatal, error, warn, info, debug, trace, data, func, "
      "poll.",
-     ucc_offsetof(ucc_base_lib_config_t, log_component), UCC_CONFIG_TYPE_LOG_COMP},
+     ucc_offsetof(ucc_base_lib_config_t, log_component),
+     UCC_CONFIG_TYPE_LOG_COMP},
+
+    {"USE_TUNING", "y",
+     "Use perf tuning",
+     ucc_offsetof(ucc_base_lib_config_t, use_tuning), UCC_CONFIG_TYPE_BOOL},
+
+    {"MIN_TEAM_SIZE", "auto",
+     "minimal team size for which component can be used",
+     ucc_offsetof(ucc_base_lib_config_t, min_team_size),
+     UCC_CONFIG_TYPE_ULUNITS},
 
     {NULL}};
 
@@ -50,8 +66,7 @@ ucc_status_t ucc_base_config_read(const char *full_prefix,
         return UCC_ERR_NO_MEMORY;
     }
     cfg->cfg_entry = cfg_entry;
-    status = ucc_config_parser_fill_opts(cfg, cfg_entry->table, full_prefix,
-                                         cfg_entry->prefix, 0);
+    status = ucc_config_parser_fill_opts(cfg, cfg_entry, full_prefix, 0);
     if (UCC_OK != status) {
         ucc_free(cfg);
         *config = NULL;

@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2022, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2022-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  *
  * See file LICENSE for terms.
  */
@@ -96,7 +96,7 @@ UccTestMpi::UccTestMpi(int argc, char *argv[], ucc_thread_mode_t _tm,
     ucc_context_config_release(ctx_config);
     if (with_onesided) {
         prev_env = getenv("UCC_TL_UCP_TUNE");
-        setenv("UCC_TL_UCP_TUNE", "alltoall:0-inf:@onesided", 1);
+        setenv("UCC_TL_UCP_TUNE", "alltoall:0-inf:@onesided#alltoallv:0-inf:@onesided", 1);
         UCC_CHECK(ucc_lib_config_read(NULL, NULL, &lib_config));
         UCC_CHECK(ucc_init(&lib_params, lib_config, &onesided_lib));
         ucc_lib_config_release(lib_config);
@@ -123,7 +123,8 @@ UccTestMpi::UccTestMpi(int argc, char *argv[], ucc_thread_mode_t _tm,
     ops        = {UCC_OP_SUM, UCC_OP_MAX};
     colls      = {UCC_COLL_TYPE_BARRIER, UCC_COLL_TYPE_ALLREDUCE};
     mtypes     = {UCC_MEMORY_TYPE_HOST};
-    inplace    = TEST_NO_INPLACE;
+    inplace    = false;
+    persistent = false;
     root_type  = ROOT_RANDOM;
     root_value = 10;
     iterations = 1;
@@ -245,11 +246,9 @@ void UccTestMpi::destroy_team(ucc_test_team_t &team)
     ucc_status_t status;
 
     team.free_ee();
-    while (UCC_INPROGRESS == (status = ucc_team_destroy(team.team))) {
-        if (UCC_OK != status) {
-            std::cerr << "ucc_team_destroy failed\n";
-            break;
-        }
+    while (UCC_INPROGRESS == (status = ucc_team_destroy(team.team))) {}
+    if (UCC_OK != status) {
+        std::cerr << "ucc_team_destroy failed\n";
     }
     if (team.comm != MPI_COMM_WORLD) {
         MPI_Comm_free(&team.comm);
@@ -285,6 +284,36 @@ void UccTestMpi::set_colls(std::vector<ucc_coll_type_t> &_colls)
 void UccTestMpi::set_ops(std::vector<ucc_reduction_op_t> &_ops)
 {
     ops = _ops;
+}
+
+int ucc_coll_reduce_supported(ucc_reduction_op_t op, ucc_datatype_t dt)
+{
+    switch (dt) {
+    case UCC_DT_INT8:
+    case UCC_DT_INT16:
+    case UCC_DT_INT32:
+    case UCC_DT_INT64:
+    case UCC_DT_INT128:
+    case UCC_DT_UINT8:
+    case UCC_DT_UINT16:
+    case UCC_DT_UINT32:
+    case UCC_DT_UINT64:
+    case UCC_DT_UINT128:
+        return (op != UCC_OP_AVG);
+    case UCC_DT_FLOAT16:
+    case UCC_DT_FLOAT32:
+    case UCC_DT_FLOAT64:
+    case UCC_DT_BFLOAT16:
+    case UCC_DT_FLOAT128:
+        return (op == UCC_OP_SUM || op == UCC_OP_PROD || op == UCC_OP_MAX ||
+                op == UCC_OP_MIN || op == UCC_OP_AVG);
+    case UCC_DT_FLOAT32_COMPLEX:
+    case UCC_DT_FLOAT64_COMPLEX:
+    case UCC_DT_FLOAT128_COMPLEX:
+        return (op == UCC_OP_SUM || op == UCC_OP_PROD || op == UCC_OP_AVG);
+    default:
+        return 0;
+    }
 }
 
 int ucc_coll_inplace_supported(ucc_coll_type_t c)
@@ -357,13 +386,12 @@ bool ucc_coll_has_msgrange(ucc_coll_type_t c)
 bool ucc_coll_has_datatype(ucc_coll_type_t c)
 {
     switch(c) {
-    case UCC_COLL_TYPE_ALLREDUCE:
-    case UCC_COLL_TYPE_REDUCE:
-    case UCC_COLL_TYPE_REDUCE_SCATTER:
-    case UCC_COLL_TYPE_REDUCE_SCATTERV:
-        return true;
-    default:
+    case UCC_COLL_TYPE_BARRIER:
+    case UCC_COLL_TYPE_FANIN:
+    case UCC_COLL_TYPE_FANOUT:
         return false;
+    default:
+        return true;
     }
 }
 
@@ -446,69 +474,74 @@ void set_gpu_device(test_set_gpu_device_t set_device)
 
 #endif
 
-std::vector<ucc_status_t> UccTestMpi::exec_tests(
-        std::vector<std::shared_ptr<TestCase>> tcs, bool triggered)
+std::vector<ucc_test_mpi_result_t> UccTestMpi::exec_tests(
+        std::vector<std::shared_ptr<TestCase>> tcs, bool triggered,
+                                                    bool persistent)
 {
+    int n_persistent = persistent ? UCC_TEST_N_PERSISTENT : 1;
+    int world_rank, num_done, i;
     ucc_status_t status;
-    int world_rank;
-    int num_done;
 
     MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
-    std::vector<ucc_status_t> rst;
-    for (auto tc: tcs) {
-        if (TEST_SKIP_NONE == tc->test_skip) {
-            if (verbose && 0 == world_rank) {
-                if (triggered) {
-                    std::cout << "Triggered "<<tc->str() << std::endl;
-                } else {
-                    std::cout << tc->str() << std::endl;
-                }
-            }
-            tc->run(triggered);
-        } else {
-            if (verbose && 0 == world_rank) {
-                std::cout << "SKIPPED: " << skip_str(tc->test_skip) << ": "
-                          << tc->str() << " " << std::endl;
-            }
-            rst.push_back(UCC_ERR_LAST);
-            return rst;
-        }
-    }
-    do {
-        num_done = 0;
+    std::vector<ucc_test_mpi_result_t> rst;
+
+    for (i = 0; i < n_persistent; i++) {
         for (auto tc: tcs) {
-            tc->mpi_progress();
-            status = tc->test();
-            if (status < 0) {
-                std::cerr << "error during coll test: "
-                          << ucc_status_string(status)
-                          << " ("<<status<<")" << std::endl;
-                MPI_Abort(MPI_COMM_WORLD, -1);
+            if (TEST_SKIP_NONE == tc->test_skip) {
+                if (verbose && 0 == world_rank) {
+                    if (triggered) {
+                        std::cout << "Triggered "<<tc->str() << std::endl;
+                    } else {
+                       std::cout << tc->str() << std::endl;
+                    }
+                }
+                tc->run(triggered);
+            } else {
+                if (verbose && 0 == world_rank) {
+                    std::cout << "SKIPPED: " << skip_str(tc->test_skip) << ": "
+                              << tc->str() << " " << std::endl;
+                }
+                rst.push_back(std::make_tuple(tc->args.coll_type, UCC_ERR_LAST));
+                return rst;
             }
-            if (status == UCC_OK) {
-                num_done++;
+        }
+        do {
+            num_done = 0;
+            for (auto tc: tcs) {
+                tc->mpi_progress();
+                status = tc->test();
+                if (status < 0) {
+                    std::cerr << "error during coll test: "
+                              << ucc_status_string(status)
+                              << " ("<<status<<")" << std::endl;
+                    MPI_Abort(MPI_COMM_WORLD, -1);
+                }
+                if (status == UCC_OK) {
+                    num_done++;
+                }
+                tc->tc_progress_ctx();
             }
-            tc->tc_progress_ctx();
-        }
-    } while (num_done != tcs.size());
-    for (auto tc: tcs) {
-        tc->reset_sbuf();
-        status = tc->check();
-        if (UCC_OK != status) {
-            std::cerr << "FAILURE in: " << tc->str() << std::endl;
-        }
-        rst.push_back(status);
+        } while (num_done != tcs.size());
+        for (auto tc: tcs) {
+            status = tc->check();
+            tc->set_input(i + 1);
+            if (UCC_OK != status) {
+                std::cerr << "FAILURE in: " << tc->str() << std::endl;
+            }
+            rst.push_back(std::make_tuple(tc->args.coll_type, status));
+       }
     }
     return rst;
 }
 
-void UccTestMpi::run_all_at_team(ucc_test_team_t &          team,
-                                 std::vector<ucc_status_t> &rst)
+void UccTestMpi::run_all_at_team(ucc_test_team_t &team,
+                                 std::vector<ucc_test_mpi_result_t> &rst)
 {
     TestCaseParams params;
 
-    params.max_size  = test_max_size;
-    params.inplace   = inplace;
+    params.max_size   = test_max_size;
+    params.inplace    = inplace;
+    params.persistent = persistent;
 
     for (auto i = 0; i < iterations; i++) {
         for (auto &c : colls) {
@@ -521,7 +554,7 @@ void UccTestMpi::run_all_at_team(ucc_test_team_t &          team,
             std::vector<ucc_test_vsize_flag_t> test_displ_vsize = {TEST_FLAG_VSIZE_64BIT};
             void **onesided_bufs;
 
-            if ((inplace == TEST_INPLACE) && !ucc_coll_inplace_supported(c)) {
+            if (inplace && !ucc_coll_inplace_supported(c)) {
                 continue;
             }
 
@@ -553,11 +586,13 @@ void UccTestMpi::run_all_at_team(ucc_test_team_t &          team,
             for (auto r : roots) {
                 for (auto mt: test_memtypes) {
                     if (triggered && !ucc_coll_triggered_supported(mt)) {
-                        rst.push_back(UCC_ERR_NOT_IMPLEMENTED);
+                        rst.push_back(std::make_tuple(c, UCC_ERR_NOT_IMPLEMENTED));
                         continue;
                     }
 
-                    if (c == UCC_COLL_TYPE_ALLTOALL && team.ctx != ctx) {
+                    if ((c == UCC_COLL_TYPE_ALLTOALL ||
+                         c == UCC_COLL_TYPE_ALLTOALLV) &&
+                        team.ctx != ctx) {
                         /* onesided alltoall */
                         if (mt != UCC_MEMORY_TYPE_HOST) {
                             continue;
@@ -571,22 +606,11 @@ void UccTestMpi::run_all_at_team(ucc_test_team_t &          team,
                     for (auto m: test_msgsizes) {
                         for (auto dt: test_dtypes) {
                             for (auto op: test_ops) {
-                                if (op == UCC_OP_AVG &&
-                                    !(dt == UCC_DT_FLOAT16 ||
-                                      dt == UCC_DT_FLOAT32 ||
-                                      dt == UCC_DT_FLOAT64 ||
-                                      dt == UCC_DT_FLOAT128 ||
-                                      dt == UCC_DT_FLOAT32_COMPLEX ||
-                                      dt == UCC_DT_FLOAT64_COMPLEX ||
-                                      dt == UCC_DT_FLOAT128_COMPLEX)) {
+                                if (ucc_coll_args_is_reduction(c) &&
+                                    !ucc_coll_reduce_supported(op, dt)) {
                                     continue;
                                 }
-                                if ((op == UCC_OP_MIN || op == UCC_OP_MAX) &&
-                                    (dt == UCC_DT_FLOAT32_COMPLEX ||
-                                     dt == UCC_DT_FLOAT64_COMPLEX ||
-                                     dt == UCC_DT_FLOAT128_COMPLEX)) {
-                                    continue;
-                                }
+
                                 if (mt != UCC_MEMORY_TYPE_HOST &&
                                     (dt == UCC_DT_FLOAT128 ||
                                      dt == UCC_DT_FLOAT128_COMPLEX)) {
@@ -604,7 +628,7 @@ void UccTestMpi::run_all_at_team(ucc_test_team_t &          team,
                                         params.buffers    = onesided_bufs;
 
                                         auto tcs = TestCase::init(team, c, nt, params);
-                                        auto res = exec_tests(tcs, triggered);
+                                        auto res = exec_tests(tcs, triggered, persistent);
                                         rst.insert(rst.end(), res.begin(), res.end());
                                     }
                                 }
@@ -618,10 +642,10 @@ void UccTestMpi::run_all_at_team(ucc_test_team_t &          team,
 }
 
 typedef struct ucc_test_thread {
-    pthread_t                 thread;
-    int                       id;
-    UccTestMpi *              test;
-    std::vector<ucc_status_t> rst;
+    pthread_t                          thread;
+    int                                id;
+    UccTestMpi *                       test;
+    std::vector<ucc_test_mpi_result_t> rst;
 } ucc_test_thread_t;
 
 static void *thread_start(void *arg)

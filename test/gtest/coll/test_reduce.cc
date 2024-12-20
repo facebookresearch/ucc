@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2022, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2022-2024, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  *
  * See file LICENSE for terms.
  */
@@ -23,17 +23,9 @@ class test_reduce : public UccCollArgs, public testing::Test {
             ucc_coll_args_t *coll = (ucc_coll_args_t*)
                     calloc(1, sizeof(ucc_coll_args_t));
 
-            ctxs[r] = (gtest_ucc_coll_ctx_t*)calloc(1,
-                          sizeof(gtest_ucc_coll_ctx_t));
-            ctxs[r]->args = coll;
-
-            coll->coll_type = UCC_COLL_TYPE_REDUCE;
-            coll->op        = T::redop;
-            coll->root      = root;
-            coll->src.info.mem_type = mem_type;
-            coll->src.info.count    = (ucc_count_t)count;
-            coll->src.info.datatype = dt;
-
+            ctxs[r]           = (gtest_ucc_coll_ctx_t*)calloc(1,
+                                sizeof(gtest_ucc_coll_ctx_t));
+            ctxs[r]->args     = coll;
             ctxs[r]->init_buf = ucc_malloc(ucc_dt_size(dt) * count,
                                                         "init buf");
             EXPECT_NE(ctxs[r]->init_buf, nullptr);
@@ -48,6 +40,21 @@ class test_reduce : public UccCollArgs, public testing::Test {
                 ptr[i] = (typename T::type)((i + r + 1) % 8);
             }
 
+            coll->coll_type = UCC_COLL_TYPE_REDUCE;
+            coll->op        = T::redop;
+            coll->root      = root;
+            if (r != root || !inplace) {
+                coll->src.info.mem_type = mem_type;
+                coll->src.info.count    = (ucc_count_t)count;
+                coll->src.info.datatype = dt;
+                UCC_CHECK(ucc_mc_alloc(&ctxs[r]->src_mc_header,
+                                       ucc_dt_size(dt) * count, mem_type));
+                coll->src.info.buffer = ctxs[r]->src_mc_header->addr;
+                UCC_CHECK(ucc_mc_memcpy(coll->src.info.buffer,
+                                        ctxs[r]->init_buf,
+                                        ucc_dt_size(dt) * count, mem_type,
+                                        UCC_MEMORY_TYPE_HOST));
+            }
             if (r == root) {
                 coll->dst.info.mem_type = mem_type;
                 coll->dst.info.count = (ucc_count_t)count;
@@ -64,15 +71,6 @@ class test_reduce : public UccCollArgs, public testing::Test {
             if (inplace) {
                 coll->mask  |= UCC_COLL_ARGS_FIELD_FLAGS;
                 coll->flags |= UCC_COLL_ARGS_FLAG_IN_PLACE;
-            }
-            if (r != root || !inplace) {
-                UCC_CHECK(ucc_mc_alloc(&ctxs[r]->src_mc_header,
-                                       ucc_dt_size(dt) * count, mem_type));
-                coll->src.info.buffer = ctxs[r]->src_mc_header->addr;
-                UCC_CHECK(ucc_mc_memcpy(coll->src.info.buffer,
-                                        ctxs[r]->init_buf,
-                                        ucc_dt_size(dt) * count, mem_type,
-                                        UCC_MEMORY_TYPE_HOST));
             }
             if (persistent) {
                 coll->mask  |= UCC_COLL_ARGS_FIELD_FLAGS;
@@ -212,6 +210,20 @@ TYPED_TEST(test_reduce_cuda, single_inplace) {
 TYPED_TEST(test_reduce_cuda, single_persistent_inplace) {
     TEST_DECLARE(UCC_MEMORY_TYPE_CUDA, TEST_INPLACE, 3, 1);
 }
+TYPED_TEST(test_reduce_cuda, single_managed) {
+    TEST_DECLARE(UCC_MEMORY_TYPE_CUDA_MANAGED, TEST_NO_INPLACE, 1, 0);
+}
+
+TYPED_TEST(test_reduce_cuda, single_persistent_managed) {
+    TEST_DECLARE(UCC_MEMORY_TYPE_CUDA_MANAGED, TEST_NO_INPLACE, 3, 1);
+}
+TYPED_TEST(test_reduce_cuda, single_inplace_managed) {
+    TEST_DECLARE(UCC_MEMORY_TYPE_CUDA_MANAGED, TEST_INPLACE, 1, 0);
+}
+
+TYPED_TEST(test_reduce_cuda, single_persistent_inplace_managed) {
+    TEST_DECLARE(UCC_MEMORY_TYPE_CUDA_MANAGED, TEST_INPLACE, 3, 1);
+}
 #endif
 
 #define TEST_DECLARE_MULTIPLE(_mem_type, _inplace)                             \
@@ -254,48 +266,83 @@ TYPED_TEST(test_reduce_host, multiple_inplace) {
 TYPED_TEST(test_reduce_cuda, multiple) {
     TEST_DECLARE_MULTIPLE(UCC_MEMORY_TYPE_CUDA, TEST_NO_INPLACE);
 }
-
 TYPED_TEST(test_reduce_cuda, multiple_inplace) {
     TEST_DECLARE_MULTIPLE(UCC_MEMORY_TYPE_CUDA, TEST_INPLACE);
+}
+TYPED_TEST(test_reduce_cuda, multiple_managed) {
+    TEST_DECLARE_MULTIPLE(UCC_MEMORY_TYPE_CUDA_MANAGED, TEST_NO_INPLACE);
+}
+TYPED_TEST(test_reduce_cuda, multiple_inplace_managed) {
+    TEST_DECLARE_MULTIPLE(UCC_MEMORY_TYPE_CUDA_MANAGED, TEST_INPLACE);
 }
 #endif
 
 template <typename T> class test_reduce_avg_order : public test_reduce<T> {
 };
 
+template <typename T> class test_reduce_dbt : public test_reduce<T> {
+};
+
+template <typename T> class test_reduce_2step : public test_reduce<T> {
+};
+
+#define TEST_DECLARE_WITH_ENV(_env, _n_procs, _persistent)                     \
+    {                                                                          \
+        UccJob        job(_n_procs, UccJob::UCC_JOB_CTX_GLOBAL, _env);         \
+        UccTeam_h     team   = job.create_team(_n_procs);                      \
+        int           repeat = _persistent ? 3 : 1;                            \
+        UccCollCtxVec ctxs;                                                    \
+        std::vector<ucc_memory_type_t> mt = {UCC_MEMORY_TYPE_HOST};            \
+        if (UCC_OK == ucc_mc_available(UCC_MEMORY_TYPE_CUDA)) {                \
+            mt.push_back(UCC_MEMORY_TYPE_CUDA);                                \
+        }                                                                      \
+        if (UCC_OK == ucc_mc_available(UCC_MEMORY_TYPE_CUDA_MANAGED)) {        \
+            mt.push_back(UCC_MEMORY_TYPE_CUDA_MANAGED);                        \
+        }                                                                      \
+        for (auto count : {5, 256, 65536}) {                                   \
+            for (auto inplace : {TEST_NO_INPLACE, TEST_INPLACE}) {             \
+                for (auto m : mt) {                                            \
+                    CHECK_TYPE_OP_SKIP(TypeParam::dt, TypeParam::redop, m);    \
+                    SET_MEM_TYPE(m);                                           \
+                    this->set_inplace(inplace);                                \
+                    this->data_init(_n_procs, TypeParam::dt, count, ctxs,      \
+                                    _persistent);                              \
+                    UccReq req(team, ctxs);                                    \
+                    CHECK_REQ_NOT_SUPPORTED_SKIP(req, this->data_fini(ctxs));  \
+                    for (auto i = 0; i < repeat; i++) {                        \
+                        req.start();                                           \
+                        req.wait();                                            \
+                        EXPECT_EQ(true, this->data_validate(ctxs));            \
+                        this->reset(ctxs);                                     \
+                    }                                                          \
+                    this->data_fini(ctxs);                                     \
+                }                                                              \
+            }                                                                  \
+        }                                                                      \
+    }
+
 TYPED_TEST_CASE(test_reduce_avg_order, CollReduceTypeOpsAvg);
+TYPED_TEST_CASE(test_reduce_dbt, CollReduceTypeOpsHost);
+TYPED_TEST_CASE(test_reduce_2step, CollReduceTypeOpsHost);
 
-TYPED_TEST(test_reduce_avg_order, avg_post_op)
-{
-    int           n_procs = 15;
-    ucc_job_env_t env     = {{"UCC_TL_UCP_REDUCE_AVG_PRE_OP", "0"}};
-    UccJob        job(n_procs, UccJob::UCC_JOB_CTX_GLOBAL, env);
-    UccTeam_h     team   = job.create_team(n_procs);
-    int           repeat = 3;
-    UccCollCtxVec ctxs;
-    std::vector<ucc_memory_type_t> mt = {UCC_MEMORY_TYPE_HOST};
+ucc_job_env_t post_op_env      = {{"UCC_TL_UCP_REDUCE_AVG_PRE_OP", "0"}};
+ucc_job_env_t reduce_dbt_env   = {{"UCC_TL_UCP_TUNE", "reduce:@dbt:0-inf:inf"},
+                                  {"UCC_CLS", "basic"}};
+ucc_job_env_t reduce_2step_env = {{"UCC_CL_HIER_TUNE", "reduce:@2step:0-inf:inf"},
+                                  {"UCC_CLS", "all"}};
 
-    if (UCC_OK == ucc_mc_available(UCC_MEMORY_TYPE_CUDA)) {
-        mt.push_back(UCC_MEMORY_TYPE_CUDA);
-    }
+TYPED_TEST(test_reduce_avg_order, avg_post_op) {
+    TEST_DECLARE_WITH_ENV(post_op_env, 15, true);
+}
 
-    for (auto count : {4, 256, 65536}) {
-        for (auto inplace : {TEST_NO_INPLACE, TEST_INPLACE}) {
-            for (auto m : mt) {
-                CHECK_TYPE_OP_SKIP(TypeParam::dt, TypeParam::redop, m);
-                SET_MEM_TYPE(m);
-                this->set_inplace(inplace);
-                this->data_init(n_procs, TypeParam::dt, count, ctxs, true);
-                UccReq req(team, ctxs);
-                CHECK_REQ_NOT_SUPPORTED_SKIP(req, this->data_fini(ctxs));
-                for (auto i = 0; i < repeat; i++) {
-                    req.start();
-                    req.wait();
-                    EXPECT_EQ(true, this->data_validate(ctxs));
-                    this->reset(ctxs);
-                }
-                this->data_fini(ctxs);
-            }
-        }
-    }
+TYPED_TEST(test_reduce_dbt, reduce_dbt_shift) {
+    TEST_DECLARE_WITH_ENV(reduce_dbt_env, 15, true);
+}
+
+TYPED_TEST(test_reduce_dbt, reduce_dbt_mirror) {
+    TEST_DECLARE_WITH_ENV(reduce_dbt_env, 16, true);
+}
+
+TYPED_TEST(test_reduce_2step, 2step) {
+    TEST_DECLARE_WITH_ENV(reduce_2step_env, 16, false);
 }

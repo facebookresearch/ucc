@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2021, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2021-2024, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  *
  * See file LICENSE for terms.
  */
@@ -7,13 +7,7 @@
 #include <inttypes.h>
 #include "tl_sharp.h"
 #include "utils/arch/cpu.h"
-
-static ucc_mpool_ops_t ucc_tl_sharp_req_mpool_ops = {
-    .chunk_alloc   = ucc_mpool_hugetlb_malloc,
-    .chunk_release = ucc_mpool_hugetlb_free,
-    .obj_init      = NULL,
-    .obj_cleanup   = NULL
-};
+#include "core/ucc_service_coll.h"
 
 static int ucc_tl_sharp_oob_barrier(void *arg)
 {
@@ -35,7 +29,7 @@ static int ucc_tl_sharp_oob_barrier(void *arg)
     status = oob_coll->allgather(&sbuf, rbuf, sizeof(char),
                                  oob_coll->coll_info, &req);
     if (UCC_OK == status) {
-        ucc_assert(req);
+        ucc_assert(req != NULL);
         while (UCC_OK != (status = oob_coll->req_test(req))) {
             if (status < 0) {
                 tl_error(ctx->super.super.lib, "failed to test oob req");
@@ -73,7 +67,7 @@ static int ucc_tl_sharp_oob_gather(void *arg, int root, void *sbuf,
 
     status = oob_coll->allgather(sbuf, rbuf, msg_size, oob_coll->coll_info, &req);
     if (UCC_OK == status) {
-        ucc_assert(req);
+        ucc_assert(req != NULL);
         while (UCC_OK != (status = oob_coll->req_test(req))) {
             if (status < 0) {
                 tl_error(ctx->super.super.lib, "failed to test oob req");
@@ -99,7 +93,7 @@ static int ucc_tl_sharp_oob_bcast(void *arg, void *buf, int size, int root)
     ucc_status_t            status;
     void                   *req, *tmp_rbuf;
 
-    tmp_rbuf = ucc_malloc(msg_size * oob_coll->n_oob_eps, "tmp_barrier");
+    tmp_rbuf = ucc_malloc(msg_size * oob_coll->n_oob_eps, "tmp_bcast");
     if (!tmp_rbuf) {
         tl_error(ctx->super.super.lib,
                  "failed to allocate %zd bytes for tmp barrier array",
@@ -110,7 +104,7 @@ static int ucc_tl_sharp_oob_bcast(void *arg, void *buf, int size, int root)
     status = oob_coll->allgather(buf, tmp_rbuf, msg_size, oob_coll ->coll_info,
                                  &req);
     if (UCC_OK == status) {
-        ucc_assert(req);
+        ucc_assert(req != NULL);
         while (UCC_OK != (status = oob_coll ->req_test(req))) {
             if (status < 0) {
                 tl_error(ctx->super.super.lib, "failed to test oob req");
@@ -148,7 +142,7 @@ static int ucc_tl_sharp_service_barrier(void *arg)
         ucc_context_progress(ctx->super.super.ucc_context);
         status = ucc_collective_test(&req->super);
     } while (status == UCC_INPROGRESS);
-    ucc_collective_finalize(&req->super);
+    ucc_collective_finalize_internal(req);
 
     return status;
 }
@@ -186,7 +180,7 @@ static int ucc_tl_sharp_service_gather(void *arg, int root, void *sbuf,
         ucc_context_progress(ctx->super.super.ucc_context);
         status = ucc_collective_test(&req->super);
     } while (status == UCC_INPROGRESS);
-    ucc_collective_finalize(&req->super);
+    ucc_collective_finalize_internal(req);
 
     if (subset.myrank != root) {
         ucc_free(rbuf);
@@ -215,16 +209,16 @@ static int ucc_tl_sharp_service_bcast(void *arg, void *buf, int size, int root)
         status = ucc_collective_test(&req->super);
     } while (status == UCC_INPROGRESS);
 
-    ucc_collective_finalize(&req->super);
+    ucc_collective_finalize_internal(req);
     return status;
 }
 
+/* rcache, arg, flags unused */
 static ucs_status_t
-ucc_tl_sharp_rcache_mem_reg_cb(void *context, ucc_rcache_t *rcache,
-                               void *arg, ucc_rcache_region_t *rregion,
-                               uint16_t flags)
+ucc_tl_sharp_rcache_mem_reg_cb(void *context, ucc_rcache_t *rcache, //NOLINT
+                               void *arg, ucc_rcache_region_t *rregion, //NOLINT
+                               uint16_t flags) //NOLINT
 {
-    ucc_tl_sharp_context_t       *ctx = (ucc_tl_sharp_context_t*) context;
     ucc_tl_sharp_rcache_region_t *region;
     void                         *address;
     size_t                        length;
@@ -234,39 +228,28 @@ ucc_tl_sharp_rcache_mem_reg_cb(void *context, ucc_rcache_t *rcache,
     length  = (size_t)(rregion->super.end - rregion->super.start);
     region  = ucc_derived_of(rregion, ucc_tl_sharp_rcache_region_t);
 
-    ret = sharp_coll_reg_mr(ctx->sharp_context, address,
+    ret = sharp_coll_reg_mr((struct sharp_coll_context *)context, address,
                             length, &region->reg.mr);
     if (ret < 0) {
-        tl_error(ctx->super.super.lib, "reg failed(%d). addr:%p len:%zd",
-                 ret, address, length);
         return UCS_ERR_INVALID_PARAM;
     } else {
-        tl_debug(ctx->super.super.lib, "region:%p reg mr:%p addr:%p len:%zd",
-                 rregion, region->reg.mr, address, length);
         return UCS_OK;
     }
 }
 
-static void ucc_tl_sharp_rcache_mem_dereg_cb(void *context, ucc_rcache_t *rcache,
+/* rcache is unused */
+static void ucc_tl_sharp_rcache_mem_dereg_cb(void *context, ucc_rcache_t *rcache, //NOLINT
                                              ucc_rcache_region_t *rregion)
 {
-    ucc_tl_sharp_context_t       *ctx    = (ucc_tl_sharp_context_t*)context;
     ucc_tl_sharp_rcache_region_t *region = ucc_derived_of(rregion,
                                                 ucc_tl_sharp_rcache_region_t);
-    int                           ret;
 
-    ret = sharp_coll_dereg_mr(ctx->sharp_context, region->reg.mr);
-    if (ret < 0) {
-        tl_error(ctx->super.super.lib, "dereg failed(%d). mr:%p",
-                 ret, region->reg.mr);
-    } else {
-        tl_debug(ctx->super.super.lib, "rregion:%p dereg mr:%p",
-                 rregion, region->reg.mr);
-    }
+    sharp_coll_dereg_mr((struct sharp_coll_context *)context, region->reg.mr);
 }
 
+/* context, rcache unused */
 static void
-ucc_tl_sharp_rcache_dump_region_cb(void *context, ucs_rcache_t *rcache,
+ucc_tl_sharp_rcache_dump_region_cb(void *context, ucs_rcache_t *rcache, //NOLINT
                                    ucs_rcache_region_t *rregion, char *buf,
                                    size_t max)
 {
@@ -279,60 +262,102 @@ ucc_tl_sharp_rcache_dump_region_cb(void *context, ucs_rcache_t *rcache,
 static ucc_rcache_ops_t ucc_tl_sharp_rcache_ops = {
     .mem_reg     = ucc_tl_sharp_rcache_mem_reg_cb,
     .mem_dereg   = ucc_tl_sharp_rcache_mem_dereg_cb,
-    .dump_region = ucc_tl_sharp_rcache_dump_region_cb
+    .dump_region = ucc_tl_sharp_rcache_dump_region_cb,
+#ifdef UCS_HAVE_RCACHE_MERGE_CB
+    .merge       = ucc_rcache_merge_cb_empty
+#endif
 };
 
-ucc_status_t ucc_tl_sharp_context_init(ucc_tl_sharp_context_t *sharp_ctx)
+ucc_status_t ucc_tl_sharp_rcache_create(struct sharp_coll_context *context,
+                                        ucc_rcache_t **rcache)
+{
+    ucc_rcache_params_t rcache_params;
+
+    ucc_rcache_set_default_params(&rcache_params);
+    rcache_params.region_struct_size = sizeof(ucc_tl_sharp_rcache_region_t);
+    rcache_params.context            = context;
+    rcache_params.ops                = &ucc_tl_sharp_rcache_ops;
+    rcache_params.ucm_events         = UCM_EVENT_VM_UNMAPPED |
+                                       UCM_EVENT_MEM_TYPE_FREE;
+
+    return ucc_rcache_create(&rcache_params, "SHARP", rcache);
+}
+
+ucc_status_t ucc_tl_sharp_context_init(ucc_tl_sharp_context_t *sharp_ctx,
+                                       struct sharp_coll_context **context,
+                                       ucc_tl_sharp_oob_ctx_t *oob_ctx,
+                                       ucc_topo_t *topo)
 {
     struct sharp_coll_init_spec  init_spec = {0};
     ucc_tl_sharp_lib_t          *lib       = ucc_derived_of(sharp_ctx->super.super.lib,
                                                             ucc_tl_sharp_lib_t);
-    ucc_status_t status;
+    ucc_sbgp_t                  *sbgp;
+    int                          local_rank;
+    int                          ret;
+
+    sbgp = ucc_topo_get_sbgp(topo, UCC_SBGP_NODE);
+    if (sbgp->status != UCC_SBGP_ENABLED) {
+        tl_debug(sharp_ctx->super.super.lib, "NODE SBGP is not enabled");
+        local_rank = 0;
+    } else {
+        local_rank = sbgp->group_rank;
+    }
 
     init_spec.progress_func                  = NULL;
-    init_spec.world_rank                     = UCC_TL_CTX_OOB(sharp_ctx).oob_ep;
-    init_spec.world_local_rank               = 0;
-    init_spec.world_size                     = UCC_TL_CTX_OOB(sharp_ctx).n_oob_eps;
+    init_spec.world_local_rank               = local_rank;
     init_spec.group_channel_idx              = 0;
-    init_spec.group_channel_idx              = 0;
-    init_spec.oob_ctx                        = &sharp_ctx->oob_ctx;
+    init_spec.oob_ctx                        = oob_ctx;
     init_spec.config                         = sharp_coll_default_config;
     init_spec.config.user_progress_num_polls = sharp_ctx->cfg.uprogress_num_polls;
     init_spec.config.ib_dev_list             = sharp_ctx->cfg.dev_list;
+#if HAVE_DECL_SHARP_COLL_HIDE_ERRORS
+    if (lib->super.super.log_component.log_level < UCC_LOG_LEVEL_DEBUG) {
+        init_spec.config.flags               |= SHARP_COLL_HIDE_ERRORS;
+    }
+#endif
+#if HAVE_DECL_SHARP_COLL_DISABLE_LAZY_GROUP_RESOURCE_ALLOC
+    if(!sharp_ctx->cfg.enable_lazy_group_alloc) {
+        init_spec.config.flags               |= SHARP_COLL_DISABLE_LAZY_GROUP_RESOURCE_ALLOC;
+    }
+#endif
+
     init_spec.job_id                         = ((getpid() ^ pthread_self())
                                                 ^ rand_r(&sharp_ctx->cfg.rand_seed));
     init_spec.enable_thread_support          =
                     (sharp_ctx->tm == UCC_THREAD_MULTIPLE) ? 1 : 0;
 
-    if (lib->cfg.use_internal_oob) {
-        tl_info(sharp_ctx->super.super.lib, "using internal oob");
-        sharp_ctx->oob_ctx.subset.map.ep_num =
-            UCC_TL_CTX_OOB(sharp_ctx).n_oob_eps;
-        sharp_ctx->oob_ctx.subset.map.type   = UCC_EP_MAP_FULL;
-        sharp_ctx->oob_ctx.subset.myrank     = UCC_TL_CTX_OOB(sharp_ctx).oob_ep;
+    if (lib->cfg.use_internal_oob != UCC_NO && sharp_ctx->super.super.ucc_context->service_team) {
+        tl_debug(sharp_ctx->super.super.lib,
+                 "using internal oob.  rank:%u size:%lu",
+                 oob_ctx->subset.myrank, oob_ctx->subset.map.ep_num);
+        init_spec.world_rank                 = oob_ctx->subset.myrank;
+        init_spec.world_size                 = oob_ctx->subset.map.ep_num;
         init_spec.oob_colls.barrier          = ucc_tl_sharp_service_barrier;
         init_spec.oob_colls.bcast            = ucc_tl_sharp_service_bcast;
         init_spec.oob_colls.gather           = ucc_tl_sharp_service_gather;
     } else {
-        tl_info(sharp_ctx->super.super.lib, "using user provided oob");
-        sharp_ctx->oob_ctx.oob      = &UCC_TL_CTX_OOB(sharp_ctx);
+        tl_debug(sharp_ctx->super.super.lib,
+                 "using user provided oob. rank:%u size:%u",
+                 oob_ctx->oob->oob_ep, oob_ctx->oob->n_oob_eps);
+        init_spec.world_rank        = oob_ctx->oob->oob_ep;
+        init_spec.world_size        = oob_ctx->oob->n_oob_eps;
         init_spec.oob_colls.barrier = ucc_tl_sharp_oob_barrier;
         init_spec.oob_colls.bcast   = ucc_tl_sharp_oob_bcast;
         init_spec.oob_colls.gather  = ucc_tl_sharp_oob_gather;
     }
 
     //TODO: replace with unique context ID?
-    status = init_spec.oob_colls.bcast((void *)&sharp_ctx->oob_ctx,
-                                        &init_spec.job_id,
-                                        sizeof(uint64_t), 0);
-    if (status != UCC_OK) {
-        tl_error(sharp_ctx->super.super.lib, "failed to broadcast SHARP job_id");
-        return status;
+    ret = init_spec.oob_colls.bcast((void *)oob_ctx, &init_spec.job_id,
+                                    sizeof(uint64_t), 0);
+    if (ret < 0) {
+        tl_error(sharp_ctx->super.super.lib,
+                 "failed to broadcast SHARP job_id");
+        return UCC_ERR_NO_MESSAGE;
     }
 
-    int ret = sharp_coll_init(&init_spec, &sharp_ctx->sharp_context);
+    ret = sharp_coll_init(&init_spec, context);
     if (ret < 0 ) {
-        tl_debug(sharp_ctx->super.super.lib, "Failed to initialize SHARP "
+        tl_debug(sharp_ctx->super.super.lib, "failed to initialize SHARP "
                  "collectives:%s(%d) job ID:%" PRIu64"\n",
                  sharp_coll_strerror(ret), ret, init_spec.job_id);
         return UCC_ERR_NO_RESOURCE;
@@ -348,12 +373,16 @@ UCC_CLASS_INIT_FUNC(ucc_tl_sharp_context_t,
     ucc_tl_sharp_context_config_t *tl_sharp_config =
         ucc_derived_of(config, ucc_tl_sharp_context_config_t);
     ucc_status_t                   status;
-    ucc_rcache_params_t            rcache_params;
     struct timeval                 tval;
 
     if (!(params->params.mask & UCC_CONTEXT_PARAM_FIELD_OOB)) {
         tl_error(tl_sharp_config->super.tl_lib, "Context OOB is required for SHARP");
         status = UCC_ERR_INVALID_PARAM;
+        goto err;
+    }
+
+    if (params->params.oob.n_oob_eps < 2) {
+        status = UCC_ERR_NOT_SUPPORTED;
         goto err;
     }
 
@@ -373,7 +402,7 @@ UCC_CLASS_INIT_FUNC(ucc_tl_sharp_context_t,
 
     status = ucc_mpool_init(&self->req_mp, 0, sizeof(ucc_tl_sharp_task_t), 0,
                             UCC_CACHE_LINE_SIZE, 8, UINT_MAX,
-                            &ucc_tl_sharp_req_mpool_ops, params->thread_mode,
+                            &ucc_coll_task_mpool_ops, params->thread_mode,
                             "tl_sharp_req_mp");
     if (status != UCC_OK) {
         tl_error(self->super.super.lib,
@@ -382,70 +411,94 @@ UCC_CLASS_INIT_FUNC(ucc_tl_sharp_context_t,
         goto err;
     }
 
-    if (self->cfg.use_rcache) {
-        rcache_params.alignment          = 64;
-        rcache_params.ucm_event_priority = 1000;
-        rcache_params.max_regions        = ULONG_MAX;
-        rcache_params.max_size           = SIZE_MAX;
-        rcache_params.region_struct_size = sizeof(ucc_tl_sharp_rcache_region_t);
-        rcache_params.max_alignment      = getpagesize();
-        rcache_params.ucm_events         = UCM_EVENT_VM_UNMAPPED |
-                                            UCM_EVENT_MEM_TYPE_FREE;
-        rcache_params.context            = self;
-        rcache_params.ops                = &ucc_tl_sharp_rcache_ops;
-        rcache_params.flags              = 0;
-
-        status = ucc_rcache_create(&rcache_params, "SHARP", &self->rcache);
-        if (status != UCC_OK) {
-            tl_error(self->super.super.lib, "failed to create rcache");
-            status = UCC_ERR_NO_RESOURCE;
-            goto err_clean_mpool;
-        }
-   }
-
-   tl_info(self->super.super.lib, "initialized tl context: %p", self);
+   tl_debug(self->super.super.lib, "initialized tl context: %p", self);
    return UCC_OK;
 
-err_clean_mpool:
-    ucc_mpool_cleanup(&self->req_mp, 0);
 err:
     return status;
 }
 
 ucc_status_t ucc_tl_sharp_context_create_epilog(ucc_base_context_t *context)
 {
-    ucc_tl_sharp_context_t *ctx = ucc_derived_of(context, ucc_tl_sharp_context_t);
-    ucc_status_t status;
+    ucc_tl_sharp_context_t *sharp_ctx = ucc_derived_of(context, ucc_tl_sharp_context_t);
+    ucc_context_t          *core_ctx  = context->ucc_context;
+    ucc_tl_sharp_lib_t     *lib       = ucc_derived_of(sharp_ctx->super.super.lib,
+                                                       ucc_tl_sharp_lib_t);
+    ucc_status_t            status;
+    ucc_topo_t             *topo;
+    ucc_subset_t            set;
 
-    status = ucc_tl_sharp_context_init(ctx);
+    if (sharp_ctx->cfg.context_per_team) {
+        return UCC_OK;
+    }
+
+    memset(&set.map, 0, sizeof(ucc_ep_map_t));
+    set.map.type   = UCC_EP_MAP_FULL;
+    set.myrank     = UCC_TL_CTX_OOB(sharp_ctx).oob_ep;
+    set.map.ep_num = UCC_TL_CTX_OOB(sharp_ctx).n_oob_eps;
+
+    if (lib->cfg.use_internal_oob != UCC_NO && core_ctx->service_team) {
+        sharp_ctx->oob_ctx.subset = set;
+    } else {
+        sharp_ctx->oob_ctx.oob = &UCC_TL_CTX_OOB(sharp_ctx);
+    }
+
+    ucc_assert(core_ctx->topo != NULL);
+    status = ucc_topo_init(set, core_ctx->topo, &topo);
+    if (UCC_OK != status) {
+        tl_error(sharp_ctx->super.super.lib, "failed to init topo");
+        return status;
+    }
+
+    status = ucc_tl_sharp_context_init(sharp_ctx, &sharp_ctx->sharp_context,
+                                       &sharp_ctx->oob_ctx, topo);
+    ucc_topo_cleanup(topo);
     if (status != UCC_OK) {
         return status;
+    }
+
+    if (sharp_ctx->cfg.use_rcache) {
+        status = ucc_tl_sharp_rcache_create(sharp_ctx->sharp_context, &sharp_ctx->rcache);
+        if (status != UCC_OK) {
+            tl_error(sharp_ctx->super.super.lib, "failed to create rcache");
+            goto err_sharp_ctx_init;
+        }
     }
 
     status = ucc_context_progress_register(
         context->ucc_context, (ucc_context_progress_fn_t)sharp_coll_progress,
-        ctx->sharp_context);
+        sharp_ctx->sharp_context);
     if (status != UCC_OK) {
         tl_error(context->lib, "failed to register progress function");
-        return status;
+        goto err_sharp_progress_register;
     }
 
     return UCC_OK;
+
+err_sharp_progress_register:
+    if (sharp_ctx->rcache != NULL) {
+        ucc_rcache_destroy(sharp_ctx->rcache);
+    }
+err_sharp_ctx_init:
+    sharp_coll_finalize(sharp_ctx->sharp_context);
+    return status;
 }
 
 UCC_CLASS_CLEANUP_FUNC(ucc_tl_sharp_context_t)
 {
-    tl_info(self->super.super.lib, "finalizing tl context: %p", self);
+    tl_debug(self->super.super.lib, "finalizing tl context: %p", self);
 
     if (self->rcache != NULL) {
         ucc_rcache_destroy(self->rcache);
     }
-    ucc_context_progress_deregister(
-        self->super.super.ucc_context,
-        (ucc_context_progress_fn_t)sharp_coll_progress, self->sharp_context);
-    if (self->sharp_context) {
-        sharp_coll_finalize(self->sharp_context);
+
+    if (self->sharp_context != NULL) {
+        ucc_context_progress_deregister(
+            self->super.super.ucc_context,
+            (ucc_context_progress_fn_t)sharp_coll_progress, self->sharp_context);
+            sharp_coll_finalize(self->sharp_context);
     }
+
     ucc_mpool_cleanup(&self->req_mp, 1);
 }
 
@@ -454,11 +507,7 @@ UCC_CLASS_DEFINE(ucc_tl_sharp_context_t, ucc_tl_context_t);
 ucc_status_t ucc_tl_sharp_get_context_attr(const ucc_base_context_t *context, /* NOLINT */
                                            ucc_base_ctx_attr_t *attr)
 {
-    if (attr->attr.mask & UCC_CONTEXT_ATTR_FIELD_CTX_ADDR_LEN) {
-        attr->attr.ctx_addr_len = 0;
-    }
-
-    attr->topo_required = 0;
-
+    ucc_base_ctx_attr_clear(attr);
+    attr->topo_required = 1;
     return UCC_OK;
 }

@@ -1,5 +1,6 @@
 /**
- * Copyright (c) 2020-2021, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2020-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *
  * See file LICENSE for terms.
  */
 
@@ -47,18 +48,17 @@ ucc_status_t ucc_mc_init(const ucc_mc_params_t *mc_params)
                 continue;
             }
             status = ucc_config_parser_fill_opts(
-                mc->config, mc->config_table.table, "UCC_",
-                mc->config_table.prefix, 1);
+                mc->config, &mc->config_table, "UCC_", 1);
             if (UCC_OK != status) {
-                ucc_info("failed to parse config for mc: %s (%d)",
-                         mc->super.name, status);
+                ucc_debug("failed to parse config for mc: %s (%d)",
+                          mc->super.name, status);
                 ucc_free(mc->config);
                 continue;
             }
             status = mc->init(mc_params);
             if (UCC_OK != status) {
-                ucc_info("mc_init failed for component: %s, skipping (%d)",
-                         mc->super.name, status);
+                ucc_debug("mc_init failed for component: %s, skipping (%d)",
+                          mc->super.name, status);
                 ucc_config_parser_release_opts(mc->config,
                                                mc->config_table.table);
                 ucc_free(mc->config);
@@ -72,7 +72,7 @@ ucc_status_t ucc_mc_init(const ucc_mc_params_t *mc_params)
                 return status;
             }
             if (attr.thread_mode < mc_params->thread_mode) {
-                ucc_warn("mc %s was allready initilized with "
+                ucc_info("mc %s was allready initilized with "
                          "different thread mode: current tm %d, provided tm %d",
                          mc->super.name, attr.thread_mode,
                          mc_params->thread_mode);
@@ -87,6 +87,9 @@ ucc_status_t ucc_mc_init(const ucc_mc_params_t *mc_params)
 
 ucc_status_t ucc_mc_available(ucc_memory_type_t mem_type)
 {
+    mem_type = (mem_type == UCC_MEMORY_TYPE_CUDA_MANAGED) ?
+                   UCC_MEMORY_TYPE_CUDA : mem_type;
+
     if (NULL == mc_ops[mem_type]) {
         return UCC_ERR_NOT_FOUND;
     }
@@ -118,18 +121,36 @@ ucc_status_t ucc_mc_get_mem_attr(const void *ptr, ucc_mem_attr_t *mem_attr)
     return UCC_OK;
 }
 
+ucc_status_t ucc_mc_get_attr(ucc_mc_attr_t *attr, ucc_memory_type_t mem_type)
+{
+    ucc_memory_type_t mt = (mem_type == UCC_MEMORY_TYPE_CUDA_MANAGED) ?
+                               UCC_MEMORY_TYPE_CUDA : mem_type;
+    ucc_mc_base_t *mc;
+
+    UCC_CHECK_MC_AVAILABLE(mt);
+    mc = ucc_container_of(mc_ops[mt], ucc_mc_base_t, ops);
+    return mc->get_attr(attr);
+}
+
+/* TODO: add the flexbility to bypass the mpool if the user asks for it */
 UCC_MC_PROFILE_FUNC(ucc_status_t, ucc_mc_alloc, (h_ptr, size, mem_type),
                     ucc_mc_buffer_header_t **h_ptr, size_t size,
                     ucc_memory_type_t mem_type)
 {
-    UCC_CHECK_MC_AVAILABLE(mem_type);
-    return mc_ops[mem_type]->mem_alloc(h_ptr, size);
+    ucc_memory_type_t mt = (mem_type == UCC_MEMORY_TYPE_CUDA_MANAGED) ?
+                               UCC_MEMORY_TYPE_CUDA : mem_type;
+
+    UCC_CHECK_MC_AVAILABLE(mt);
+    return mc_ops[mt]->mem_alloc(h_ptr, size, mem_type);
 }
 
 ucc_status_t ucc_mc_free(ucc_mc_buffer_header_t *h_ptr)
 {
-    UCC_CHECK_MC_AVAILABLE(h_ptr->mt);
-    return mc_ops[h_ptr->mt]->mem_free(h_ptr);
+    ucc_memory_type_t mt = (h_ptr->mt == UCC_MEMORY_TYPE_CUDA_MANAGED) ?
+                               UCC_MEMORY_TYPE_CUDA : h_ptr->mt;
+
+    UCC_CHECK_MC_AVAILABLE(mt);
+    return mc_ops[mt]->mem_free(h_ptr);
 }
 
 UCC_MC_PROFILE_FUNC(ucc_status_t, ucc_mc_memcpy,
@@ -151,12 +172,26 @@ UCC_MC_PROFILE_FUNC(ucc_status_t, ucc_mc_memcpy,
     }
     /* take any non host MC component */
     mt = (dst_mem == UCC_MEMORY_TYPE_HOST) ? src_mem : dst_mem;
+    mt = (mt == UCC_MEMORY_TYPE_CUDA_MANAGED) ? UCC_MEMORY_TYPE_CUDA : mt;
     UCC_CHECK_MC_AVAILABLE(mt);
     return mc_ops[mt]->memcpy(dst, src, len, dst_mem, src_mem);
 }
 
+ucc_status_t ucc_mc_memset(void *ptr, int value, size_t size,
+                           ucc_memory_type_t mem_type)
+{
+    mem_type = (mem_type == UCC_MEMORY_TYPE_CUDA_MANAGED) ?
+                   UCC_MEMORY_TYPE_CUDA : mem_type;
+
+    UCC_CHECK_MC_AVAILABLE(mem_type);
+    return mc_ops[mem_type]->memset(ptr, value, size);
+}
+
 ucc_status_t ucc_mc_flush(ucc_memory_type_t mem_type)
 {
+    mem_type = (mem_type == UCC_MEMORY_TYPE_CUDA_MANAGED) ?
+                   UCC_MEMORY_TYPE_CUDA : mem_type;
+
     UCC_CHECK_MC_AVAILABLE(mem_type);
     if (mc_ops[mem_type]->flush) {
         return mc_ops[mem_type]->flush();

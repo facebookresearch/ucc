@@ -1,5 +1,6 @@
 /**
- * Copyright (c) 2020-2021, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2020-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *
  * See file LICENSE for terms.
  */
 
@@ -15,6 +16,8 @@
 typedef struct ucc_global_config {
     /* Log level above which log messages will be printed*/
     ucc_log_component_config_t log_component;
+    /* Print collective info for each initialized collective */
+    ucc_log_component_config_t coll_trace;
     ucc_component_framework_t  cl_framework;
     ucc_component_framework_t  tl_framework;
     ucc_component_framework_t  mc_framework;
@@ -25,15 +28,15 @@ typedef struct ucc_global_config {
     char *install_path;
     int   initialized;
     /* Profiling mode */
-    unsigned                   profile_mode;
+    uint64_t                   profile_mode;
 
     /* Profiling output file name */
     char *profile_file;
 
     /* Limit for profiling log size */
     size_t                     profile_log_size;
-    char *                     cfg_filename;
-    ucc_file_config_t *        file_cfg;
+    char                      *cfg_filename;
+    ucc_file_config_t         *file_cfg;
 } ucc_global_config_t;
 
 extern ucc_global_config_t ucc_global_config;

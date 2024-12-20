@@ -1,5 +1,6 @@
 /**
- * Copyright (c) 2021, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2021-2024, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *
  * See file LICENSE for terms.
  */
 
@@ -10,13 +11,14 @@
 #include "ucc_datastruct.h"
 #include "ucc_math.h"
 #include "utils/ucc_time.h"
+#include "utils/ucc_assert.h"
 #include <string.h>
 
 #define UCC_COLL_TYPE_NUM (ucc_ilog2(UCC_COLL_TYPE_LAST - 1) + 1)
 
 #define UCC_COLL_TYPE_ALL ((UCC_COLL_TYPE_LAST << 1) - 3)
 
-#define UCC_MEMORY_TYPE_ASSYMETRIC                                             \
+#define UCC_MEMORY_TYPE_ASYMMETRIC                                             \
     ((ucc_memory_type_t)((int)UCC_MEMORY_TYPE_LAST + 1))
 
 #define UCC_MEMORY_TYPE_NOT_APPLY                                              \
@@ -24,25 +26,27 @@
 
 #define UCC_MSG_SIZE_INVALID SIZE_MAX
 
-#define UCC_MSG_SIZE_ASSYMETRIC (UCC_MSG_SIZE_INVALID - 1)
+#define UCC_MSG_SIZE_ASYMMETRIC (UCC_MSG_SIZE_INVALID - 1)
 
-#define UCC_IS_INPLACE(_args) \
-    (((_args).mask & UCC_COLL_ARGS_FIELD_FLAGS) && \
+#define UCC_IS_INPLACE(_args)                                                  \
+    (((_args).mask & UCC_COLL_ARGS_FIELD_FLAGS) &&                             \
      ((_args).flags & UCC_COLL_ARGS_FLAG_IN_PLACE))
 
-#define UCC_IS_PERSISTENT(_args) \
-    (((_args).mask & UCC_COLL_ARGS_FIELD_FLAGS) && \
+#define UCC_IS_PERSISTENT(_args)                                               \
+    (((_args).mask & UCC_COLL_ARGS_FIELD_FLAGS) &&                             \
      ((_args).flags & UCC_COLL_ARGS_FLAG_PERSISTENT))
 
-#define UCC_COLL_TIMEOUT_REQUIRED(_task)                       \
-    (((_task)->bargs.args.mask & UCC_COLL_ARGS_FIELD_FLAGS) && \
+#define UCC_IS_ROOT(_args, _myrank) ((_args).root == (_myrank))
+
+#define UCC_COLL_TIMEOUT_REQUIRED(_task)                                       \
+    (((_task)->bargs.args.mask & UCC_COLL_ARGS_FIELD_FLAGS) &&                 \
      ((_task)->bargs.args.flags & UCC_COLL_ARGS_FLAG_TIMEOUT))
 
-#define UCC_COLL_SET_TIMEOUT(_task, _timeout) do {                 \
-        (_task)->bargs.args.mask   |= UCC_COLL_ARGS_FIELD_FLAGS;   \
-        (_task)->bargs.args.flags  |= UCC_COLL_ARGS_FLAG_TIMEOUT;  \
-        (_task)->bargs.args.timeout = _timeout;                    \
-        (_task)->start_time   = ucc_get_time();                    \
+#define UCC_COLL_SET_TIMEOUT(_task, _timeout) do {                             \
+        (_task)->bargs.args.mask   |= UCC_COLL_ARGS_FIELD_FLAGS;               \
+        (_task)->bargs.args.flags  |= UCC_COLL_ARGS_FLAG_TIMEOUT;              \
+        (_task)->bargs.args.timeout = _timeout;                                \
+        (_task)->start_time   = ucc_get_time();                                \
     } while(0)
 
 #define UCC_COLL_ARGS_COUNT64(_args)                                           \
@@ -64,9 +68,24 @@
 #define UCC_COLL_ARGS_CONTIG_BUFFER(_args)                                     \
     (UCC_COLL_IS_SRC_CONTIG(_args) && UCC_COLL_IS_DST_CONTIG(_args))
 
-#define UCC_COLL_ARGS_ACTIVE_SET(_args)             \
+#define UCC_COLL_ARGS_ACTIVE_SET(_args)                                        \
     ((_args)->mask & UCC_COLL_ARGS_FIELD_ACTIVE_SET)
 
+#define UCC_MEM_TYPE_MASK_FULL (UCC_BIT(UCC_MEMORY_TYPE_HOST) |                \
+                                UCC_BIT(UCC_MEMORY_TYPE_CUDA) |                \
+                                UCC_BIT(UCC_MEMORY_TYPE_CUDA_MANAGED) |        \
+                                UCC_BIT(UCC_MEMORY_TYPE_ROCM) |                \
+                                UCC_BIT(UCC_MEMORY_TYPE_ROCM_MANAGED))
+
+static inline int ucc_coll_args_is_reduction(ucc_coll_type_t ct)
+{
+    if (ct == UCC_COLL_TYPE_ALLREDUCE || ct == UCC_COLL_TYPE_REDUCE ||
+        ct == UCC_COLL_TYPE_REDUCE_SCATTER ||
+        ct == UCC_COLL_TYPE_REDUCE_SCATTERV) {
+        return 1;
+    }
+    return 0;
+}
 
 static inline size_t
 ucc_coll_args_get_count(const ucc_coll_args_t *args, const ucc_count_t *counts,
@@ -104,29 +123,6 @@ ucc_coll_args_get_displacement(const ucc_coll_args_t *args,
     return ((uint32_t *)displacements)[idx];
 }
 
-static inline const char* ucc_mem_type_str(ucc_memory_type_t ct)
-{
-    switch((int)ct) {
-    case UCC_MEMORY_TYPE_HOST:
-        return "Host";
-    case UCC_MEMORY_TYPE_CUDA:
-        return "Cuda";
-    case UCC_MEMORY_TYPE_CUDA_MANAGED:
-        return "CudaManaged";
-    case UCC_MEMORY_TYPE_ROCM:
-        return "Rocm";
-    case UCC_MEMORY_TYPE_ROCM_MANAGED:
-        return "RocmManaged";
-    case UCC_MEMORY_TYPE_ASSYMETRIC:
-        return "assymetric";
-    case UCC_MEMORY_TYPE_NOT_APPLY:
-        return "n/a";
-    default:
-        break;
-    }
-    return "invalid";
-}
-
 static inline size_t
 ucc_coll_args_get_total_count(const ucc_coll_args_t *args,
                               const ucc_count_t *counts, ucc_rank_t size)
@@ -147,6 +143,28 @@ ucc_coll_args_get_total_count(const ucc_coll_args_t *args,
 
     return count;
 }
+
+static inline size_t
+ucc_coll_args_get_v_buffer_size(const ucc_coll_args_t *args,
+                                const ucc_count_t *counts,
+                                const ucc_aint_t *displacements,
+                                ucc_rank_t size)
+{
+    ucc_rank_t i;
+    size_t max_disp, idx_count;
+
+    max_disp = ucc_coll_args_get_displacement(args, displacements, 0);
+    idx_count = ucc_coll_args_get_count(args, counts, 0);
+    for (i = 1; i < size; i++) {
+        size_t disp_i = ucc_coll_args_get_displacement(args, displacements, i);
+        if (disp_i > max_disp) {
+            max_disp = disp_i;
+            idx_count = ucc_coll_args_get_count(args, counts, i);
+        }
+    }
+
+    return max_disp + idx_count;
+}
 typedef struct ucc_base_coll_args ucc_base_coll_args_t;
 
 ucc_coll_type_t   ucc_coll_type_from_str(const char *str);
@@ -159,7 +177,7 @@ size_t            ucc_coll_args_msgsize(const ucc_coll_args_t *args,
 ucc_memory_type_t ucc_coll_args_mem_type(const ucc_coll_args_t *args,
                                          ucc_rank_t rank);
 
-
+/* Convert rank from subset space to rank space (UCC team space) */
 static inline ucc_rank_t ucc_ep_map_eval(ucc_ep_map_t map, ucc_rank_t rank)
 {
     ucc_rank_t r;
@@ -177,7 +195,7 @@ static inline ucc_rank_t ucc_ep_map_eval(ucc_ep_map_t map, ucc_rank_t rank)
         r = (ucc_rank_t)map.cb.cb(rank, map.cb.cb_ctx);
         break;
     default:
-        r = -1;
+        r = UCC_RANK_INVALID;
     }
     return r;
 }
@@ -207,18 +225,29 @@ ucc_ep_map_t ucc_ep_map_from_array_64(uint64_t **array, ucc_rank_t size,
                                       ucc_rank_t full_size, int need_free);
 
 typedef struct ucc_coll_task ucc_coll_task_t;
-void ucc_coll_str(const ucc_coll_task_t *task, char *str, size_t len);
+void ucc_coll_str(const ucc_coll_task_t *task, char *str, size_t len,
+                  int verbosity);
 
 /* Creates a rank map that reverses rank order, ie
    rank r -> size - 1 - r */
 ucc_ep_map_t ucc_ep_map_create_reverse(ucc_rank_t size);
 
-/* Creates an inverse mapping for a given map */
-ucc_status_t ucc_ep_map_create_inverse(ucc_ep_map_t map, ucc_ep_map_t *inv_map);
+/* Creates an inverse mapping for a given map,
+   only if given map is not a reverse map
+   or a reordered map within the reverse direction task.
+   @param [in] map                       given map
+   @param [in] inv_map                   output map
+   @param [in] reversed_reordered_flag   1 if is reverse direction task and
+                                         reorder ranks is configured as yes,
+                                         0 otherwise. */
+ucc_status_t ucc_ep_map_create_inverse(ucc_ep_map_t map, ucc_ep_map_t *inv_map,
+                                       int reversed_reordered_flag);
 
 ucc_status_t ucc_ep_map_create_nested(ucc_ep_map_t *base_map,
                                       ucc_ep_map_t *sub_map,
                                       ucc_ep_map_t *out);
+
+int ucc_ep_map_is_identity(const ucc_ep_map_t *map);
 
 void ucc_ep_map_destroy_nested(ucc_ep_map_t *out);
 
@@ -252,10 +281,30 @@ static inline size_t ucc_buffer_block_offset(size_t     total_count,
     return (block < left) ? offset - (left - block) : offset;
 }
 
+static inline size_t ucc_buffer_vector_block_offset(ucc_count_t *counts,
+                                                    int is64,
+                                                    ucc_rank_t rank)
+{
+    size_t offset = 0;
+    ucc_rank_t i;
+
+    if (is64) {
+        for (i = 0; i < rank; i++) {
+            offset += ((uint64_t *)counts)[i];
+        }
+    } else {
+        for (i = 0; i < rank; i++) {
+            offset += ((uint32_t *)counts)[i];
+        }
+    }
+    return offset;
+}
+
 /* Given the rank space A (e.g. core ucc team), a subset B (e.g. active set
    within the core team), the ep_map that maps ranks from the subset B to A,
-   and the rank of a process within A.
-   The function below computes the local rank of the process within subset B. */
+   and the rank of a process within A. The function below computes the local
+   rank of the process within subset B.
+   i.e., convert from rank space (UCC team) to subset space */
 static inline ucc_rank_t ucc_ep_map_local_rank(ucc_ep_map_t map,
                                                ucc_rank_t   rank)
 {
@@ -320,5 +369,28 @@ static inline size_t ucc_buffer_block_offset_aligned(size_t total_count,
 
     return ucc_min(offset, total_count);
 }
+
+/* Returns non-zero if collective defined by args operates on predefined dt.
+   @param [in] args        pointer to the collective args.
+   @param [in] rank        rank to check, used only for rooted collective
+                           operations. */
+int ucc_coll_args_is_predefined_dt(const ucc_coll_args_t *args, ucc_rank_t rank);
+
+int ucc_coll_args_is_mem_symmetric(const ucc_coll_args_t *args, ucc_rank_t rank);
+
+int ucc_coll_args_is_rooted(ucc_coll_type_t ct);
+
+typedef struct ucc_buffer_info_asymmetric_memtype ucc_buffer_info_asymmetric_memtype_t;
+typedef struct ucc_mc_buffer_header ucc_mc_buffer_header_t;
+
+ucc_status_t
+ucc_coll_args_init_asymmetric_buffer(ucc_coll_args_t *args,
+                                       ucc_team_h team,
+                                       ucc_buffer_info_asymmetric_memtype_t *save_info);
+
+ucc_status_t
+ucc_coll_args_free_asymmetric_buffer(ucc_coll_task_t *task);
+
+ucc_status_t ucc_copy_asymmetric_buffer(ucc_coll_task_t *task);
 
 #endif

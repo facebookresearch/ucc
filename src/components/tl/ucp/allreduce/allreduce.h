@@ -11,6 +11,8 @@
 enum {
     UCC_TL_UCP_ALLREDUCE_ALG_KNOMIAL,
     UCC_TL_UCP_ALLREDUCE_ALG_SRA_KNOMIAL,
+    UCC_TL_UCP_ALLREDUCE_ALG_SLIDING_WINDOW,
+    UCC_TL_UCP_ALLREDUCE_ALG_DBT,
     UCC_TL_UCP_ALLREDUCE_ALG_LAST
 };
 
@@ -26,7 +28,7 @@ ucc_status_t ucc_tl_ucp_allreduce_init(ucc_tl_ucp_task_t *task);
         if (!UCC_IS_INPLACE(_args) &&                                          \
             (_args.src.info.mem_type != _args.dst.info.mem_type)) {            \
             tl_error(UCC_TL_TEAM_LIB(_team),                                   \
-                     "assymetric src/dst memory types are not supported yet"); \
+                     "asymmetric src/dst memory types are not supported yet"); \
             status = UCC_ERR_NOT_SUPPORTED;                                    \
             goto out;                                                          \
         }                                                                      \
@@ -35,9 +37,15 @@ ucc_status_t ucc_tl_ucp_allreduce_init(ucc_tl_ucp_task_t *task);
 #define ALLREDUCE_TASK_CHECK(_args, _team)                                     \
     CHECK_SAME_MEMTYPE((_args), (_team));
 
+
 ucc_status_t ucc_tl_ucp_allreduce_knomial_init(ucc_base_coll_args_t *coll_args,
-                                               ucc_base_team_t *     team,
-                                               ucc_coll_task_t **    task_h);
+                                               ucc_base_team_t *team,
+                                               ucc_coll_task_t **task_h);
+
+ucc_status_t
+ucc_tl_ucp_allreduce_sliding_window_init(ucc_base_coll_args_t *coll_args,
+                                         ucc_base_team_t      *team,
+                                         ucc_coll_task_t     **task_h);
 
 ucc_status_t ucc_tl_ucp_allreduce_knomial_init_common(ucc_tl_ucp_task_t *task);
 
@@ -45,15 +53,29 @@ ucc_status_t ucc_tl_ucp_allreduce_knomial_start(ucc_coll_task_t *task);
 
 void ucc_tl_ucp_allreduce_knomial_progress(ucc_coll_task_t *task);
 
+ucc_status_t
+ucc_tl_ucp_allreduce_sliding_window_start(ucc_coll_task_t *coll_task);
+
+ucc_status_t
+ucc_tl_ucp_allreduce_sliding_window_finalize(ucc_coll_task_t *task);
+
 ucc_status_t ucc_tl_ucp_allreduce_knomial_finalize(ucc_coll_task_t *task);
 
 ucc_status_t ucc_tl_ucp_allreduce_sra_knomial_init(ucc_base_coll_args_t *coll_args,
-                                                   ucc_base_team_t *     team,
-                                                   ucc_coll_task_t **    task_h);
+                                                   ucc_base_team_t *team,
+                                                   ucc_coll_task_t **task_h);
 
 ucc_status_t ucc_tl_ucp_allreduce_sra_knomial_start(ucc_coll_task_t *task);
 
 ucc_status_t ucc_tl_ucp_allreduce_sra_knomial_progress(ucc_coll_task_t *task);
+
+ucc_status_t ucc_tl_ucp_allreduce_dbt_init(ucc_base_coll_args_t *coll_args,
+                                           ucc_base_team_t *team,
+                                           ucc_coll_task_t **task_h);
+
+ucc_status_t ucc_tl_ucp_allreduce_dbt_start(ucc_coll_task_t *task);
+
+ucc_status_t ucc_tl_ucp_allreduce_dbt_progress(ucc_coll_task_t *task);
 
 static inline int ucc_tl_ucp_allreduce_alg_from_str(const char *str)
 {

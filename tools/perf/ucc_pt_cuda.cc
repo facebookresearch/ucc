@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2022, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2022-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  *
  * See file LICENSE for terms.
  */
@@ -15,7 +15,7 @@ ucc_pt_cuda_iface_t ucc_pt_cuda_iface = {
 
 #define LOAD_CUDA_SYM(_sym, _pt_sym) ({                                    \
             void *h = dlsym(handle, _sym);                                 \
-            if ((error = dlerror()) != NULL)  {                            \
+            if (dlerror() != NULL)  {                                      \
                 return;                                                    \
             }                                                              \
             ucc_pt_cuda_iface. _pt_sym =                                   \
@@ -24,7 +24,6 @@ ucc_pt_cuda_iface_t ucc_pt_cuda_iface = {
 
 void ucc_pt_cuda_init(void)
 {
-    char *error;
     void *handle;
 
     handle = dlopen ("libcudart.so", RTLD_LAZY);
@@ -37,6 +36,10 @@ void ucc_pt_cuda_init(void)
     LOAD_CUDA_SYM("cudaGetErrorString", getErrorString);
     LOAD_CUDA_SYM("cudaStreamCreateWithFlags", streamCreateWithFlags);
     LOAD_CUDA_SYM("cudaStreamDestroy", streamDestroy);
+    LOAD_CUDA_SYM("cudaMalloc", cudaMalloc);
+    LOAD_CUDA_SYM("cudaFree", cudaFree);
+    LOAD_CUDA_SYM("cudaMemset", cudaMemset);
+    LOAD_CUDA_SYM("cudaMallocManaged", cudaMallocManaged);
 
     ucc_pt_cuda_iface.available = 1;
 }

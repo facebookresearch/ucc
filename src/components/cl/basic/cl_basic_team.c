@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2020-2021, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2020-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  *
  * See file LICENSE for terms.
  */
@@ -11,36 +11,37 @@
 UCC_CLASS_INIT_FUNC(ucc_cl_basic_team_t, ucc_base_context_t *cl_context,
                     const ucc_base_team_params_t *params)
 {
-    ucc_cl_basic_context_t *ctx =
+    ucc_cl_basic_context_t *ctx       =
         ucc_derived_of(cl_context, ucc_cl_basic_context_t);
+    unsigned                n_tl_ctxs = ctx->super.n_tl_ctxs;
     int                     i;
     ucc_status_t            status;
 
     UCC_CLASS_CALL_SUPER_INIT(ucc_cl_team_t, &ctx->super, params);
-    self->tl_teams = ucc_malloc(sizeof(ucc_tl_team_t *) * ctx->n_tl_ctxs,
+    self->tl_teams = ucc_malloc(sizeof(ucc_tl_team_t *) * n_tl_ctxs,
                                 "cl_basic_tl_teams");
     if (!self->tl_teams) {
         cl_error(cl_context->lib, "failed to allocate %zd bytes for tl_teams",
-                 sizeof(ucc_tl_team_t *) * ctx->n_tl_ctxs);
+                 sizeof(ucc_tl_team_t *) * n_tl_ctxs);
         status = UCC_ERR_NO_MEMORY;
         goto err;
     }
     self->n_tl_teams = 0;
     self->score_map  = NULL;
     status           = ucc_team_multiple_req_alloc(&self->team_create_req,
-                                                   ctx->n_tl_ctxs);
+                                                   n_tl_ctxs);
     if (UCC_OK != status) {
         cl_error(cl_context->lib, "failed to allocate team req multiple");
         goto err;
     }
-    for (i = 0; i < ctx->n_tl_ctxs; i++) {
+    for (i = 0; i < n_tl_ctxs; i++) {
         memcpy(&self->team_create_req->descs[i].param, params,
                sizeof(ucc_base_team_params_t));
-        self->team_create_req->descs[i].ctx            = ctx->tl_ctxs[i];
+        self->team_create_req->descs[i].ctx            = ctx->super.tl_ctxs[i];
         self->team_create_req->descs[i].param.scope    = UCC_CL_BASIC;
         self->team_create_req->descs[i].param.scope_id = 0;
     }
-    self->team_create_req->n_teams = ctx->n_tl_ctxs;
+    self->team_create_req->n_teams = n_tl_ctxs;
 
     status = ucc_tl_team_create_multiple(self->team_create_req);
     if (status < 0) {
@@ -48,7 +49,7 @@ UCC_CLASS_INIT_FUNC(ucc_cl_basic_team_t, ucc_base_context_t *cl_context,
                  status);
         goto err;
     }
-    cl_info(cl_context->lib, "posted cl team: %p", self);
+    cl_debug(cl_context->lib, "posted cl team: %p", self);
     return UCC_OK;
 err:
     ucc_free(self->tl_teams);
@@ -57,7 +58,7 @@ err:
 
 UCC_CLASS_CLEANUP_FUNC(ucc_cl_basic_team_t)
 {
-    cl_info(self->super.super.context->lib, "finalizing cl team: %p", self);
+    cl_debug(self->super.super.context->lib, "finalizing cl team: %p", self);
 }
 
 UCC_CLASS_DEFINE_DELETE_FUNC(ucc_cl_basic_team_t, ucc_base_team_t);
@@ -112,17 +113,17 @@ ucc_status_t ucc_cl_basic_team_create_test(ucc_base_team_t *cl_team)
 
     status = ucc_tl_team_create_multiple(team->team_create_req);
     if (status == UCC_OK) {
-        for (i = 0; i < ctx->n_tl_ctxs; i++) {
+        for (i = 0; i < ctx->super.n_tl_ctxs; i++) {
             if (team->team_create_req->descs[i].status == UCC_OK) {
                 team->tl_teams[team->n_tl_teams++] =
                     team->team_create_req->descs[i].team;
-                cl_info(ctx->super.super.lib, "initialized tl %s team",
-                        UCC_TL_CTX_IFACE(team->team_create_req->descs[i].ctx)->
-                        super.name);
+                cl_debug(ctx->super.super.lib, "initialized tl %s team",
+                         UCC_TL_CTX_IFACE(team->team_create_req->descs[i].ctx)->
+                         super.name);
             } else {
-                cl_info(ctx->super.super.lib, "failed to create tl %s team: (%d)",
-                        UCC_TL_CTX_IFACE(team->team_create_req->descs[i].ctx)->
-                        super.name, team->team_create_req->descs[i].status);
+                cl_debug(ctx->super.super.lib, "failed to create tl %s team: (%d)",
+                         UCC_TL_CTX_IFACE(team->team_create_req->descs[i].ctx)->
+                         super.name, team->team_create_req->descs[i].status);
             }
         }
         ucc_team_multiple_req_free(team->team_create_req);
@@ -172,6 +173,7 @@ ucc_status_t ucc_cl_basic_team_get_scores(ucc_base_team_t   *cl_team,
     ucc_cl_basic_team_t *team = ucc_derived_of(cl_team, ucc_cl_basic_team_t);
     ucc_base_context_t  *ctx  = UCC_CL_TEAM_CTX(team);
     ucc_status_t         status;
+    ucc_coll_score_team_info_t team_info;
 
     status = ucc_coll_score_dup(team->score, score);
     if (UCC_OK != status) {
@@ -179,10 +181,16 @@ ucc_status_t ucc_cl_basic_team_get_scores(ucc_base_team_t   *cl_team,
     }
 
     if (strlen(ctx->score_str) > 0) {
-        status = ucc_coll_score_update_from_str(
-            ctx->score_str, *score, UCC_CL_TEAM_SIZE(team), NULL, cl_team,
-            UCC_CL_BASIC_DEFAULT_SCORE, NULL);
+        team_info.alg_fn              = NULL;
+        team_info.default_score       = UCC_CL_BASIC_DEFAULT_SCORE;
+        team_info.init                = NULL;
+        team_info.num_mem_types       = 0;
+        team_info.supported_mem_types = NULL; /* all memory types supported*/
+        team_info.supported_colls     = UCC_COLL_TYPE_ALL;
+        team_info.size                = UCC_CL_TEAM_SIZE(team);
 
+        status = ucc_coll_score_update_from_str(ctx->score_str, &team_info,
+                                                &team->super.super, *score);
         /* If INVALID_PARAM - User provided incorrect input - try to proceed */
         if ((status < 0) && (status != UCC_ERR_INVALID_PARAM) &&
             (status != UCC_ERR_NOT_SUPPORTED)) {

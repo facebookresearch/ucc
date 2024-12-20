@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2021-2022, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2021-2024, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # See file LICENSE for terms.
 #
 
@@ -76,10 +76,24 @@ AC_ARG_ENABLE([debug],
 AS_IF([test "x$enable_debug" = xyes],
     [AS_MESSAGE([debug build])
     AC_DEFINE([ENABLE_DEBUG], [1], [Enable debugging code])
-    CFLAGS="$CFLAGS -O0 -g3"
-    CXXFLAGS="$CXXFLAGS -O0 -g3"
+
+# use -g3 if compiler supports it, otherwise just -g
+    CHECK_COMPILER_FLAG([-g3], [-g3],
+                        [AC_LANG_SOURCE([[int main(int argc, char** argv){return 0;}]])],
+                        [CFLAGS="$CFLAGS -O0 -g3"
+                         CXXFLAGS="$CXXFLAGS -O0 -g3"],
+                        [CFLAGS="$CFLAGS -O0 -g"
+                         CXXFLAGS="$CXXFLAGS -O0 -g"])
     AC_DEFINE([UCS_MAX_LOG_LEVEL], [UCS_LOG_LEVEL_TRACE_POLL], [Highest log level])],
     [CFLAGS="$CFLAGS -O3 -g -DNDEBUG"
     CXXFLAGS="$CXXFLAGS -O3 -g -DNDEBUG"
     AC_DEFINE([UCS_MAX_LOG_LEVEL], [UCS_LOG_LEVEL_DEBUG], [Highest log level])
     ])
+
+#
+# Enables additional checks
+#
+AC_ARG_ENABLE([assert],
+    AS_HELP_STRING([--enable-assert], [Enable extra correctness checks (default is NO).]),
+    [AC_DEFINE([UCC_ENABLE_ASSERT], [1], [Enable asserts])],
+    [enable_assert=no])

@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2021-2022, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2021-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  *
  * See file LICENSE for terms.
  */
@@ -9,27 +9,31 @@
 #include "core/ucc_ee.h"
 #include "utils/ucc_math.h"
 #include "utils/ucc_coll_utils.h"
-
 #include <sharp/api/version.h>
 #include <sharp/api/sharp_coll.h>
 
 enum sharp_datatype ucc_to_sharp_dtype[] = {
-    [UCC_DT_PREDEFINED_ID(UCC_DT_INT8)]     = SHARP_DTYPE_NULL,
-    [UCC_DT_PREDEFINED_ID(UCC_DT_INT16)]    = SHARP_DTYPE_SHORT,
-    [UCC_DT_PREDEFINED_ID(UCC_DT_INT32)]    = SHARP_DTYPE_INT,
-    [UCC_DT_PREDEFINED_ID(UCC_DT_INT64)]    = SHARP_DTYPE_LONG,
-    [UCC_DT_PREDEFINED_ID(UCC_DT_INT128)]   = SHARP_DTYPE_NULL,
-    [UCC_DT_PREDEFINED_ID(UCC_DT_UINT8)]    = SHARP_DTYPE_NULL,
-    [UCC_DT_PREDEFINED_ID(UCC_DT_UINT16)]   = SHARP_DTYPE_UNSIGNED_SHORT,
-    [UCC_DT_PREDEFINED_ID(UCC_DT_UINT32)]   = SHARP_DTYPE_UNSIGNED,
-    [UCC_DT_PREDEFINED_ID(UCC_DT_UINT64)]   = SHARP_DTYPE_UNSIGNED_LONG,
-    [UCC_DT_PREDEFINED_ID(UCC_DT_UINT128)]  = SHARP_DTYPE_NULL,
-    [UCC_DT_PREDEFINED_ID(UCC_DT_FLOAT16)]  = SHARP_DTYPE_FLOAT_SHORT,
-    [UCC_DT_PREDEFINED_ID(UCC_DT_FLOAT32)]  = SHARP_DTYPE_FLOAT,
-    [UCC_DT_PREDEFINED_ID(UCC_DT_FLOAT64)]  = SHARP_DTYPE_DOUBLE,
-    [UCC_DT_PREDEFINED_ID(UCC_DT_FLOAT128)] = SHARP_DTYPE_NULL,
-    // TODO in hpcx-2.11 add UCC_DT_BFLOAT16
+    [UCC_DT_PREDEFINED_ID(UCC_DT_INT16)]            = SHARP_DTYPE_SHORT,
+    [UCC_DT_PREDEFINED_ID(UCC_DT_INT32)]            = SHARP_DTYPE_INT,
+    [UCC_DT_PREDEFINED_ID(UCC_DT_INT64)]            = SHARP_DTYPE_LONG,
+    [UCC_DT_PREDEFINED_ID(UCC_DT_INT128)]           = SHARP_DTYPE_NULL,
+    [UCC_DT_PREDEFINED_ID(UCC_DT_UINT16)]           = SHARP_DTYPE_UNSIGNED_SHORT,
+    [UCC_DT_PREDEFINED_ID(UCC_DT_UINT32)]           = SHARP_DTYPE_UNSIGNED,
+    [UCC_DT_PREDEFINED_ID(UCC_DT_UINT64)]           = SHARP_DTYPE_UNSIGNED_LONG,
+    [UCC_DT_PREDEFINED_ID(UCC_DT_UINT128)]          = SHARP_DTYPE_NULL,
+    [UCC_DT_PREDEFINED_ID(UCC_DT_FLOAT16)]          = SHARP_DTYPE_FLOAT_SHORT,
+    [UCC_DT_PREDEFINED_ID(UCC_DT_FLOAT32)]          = SHARP_DTYPE_FLOAT,
+    [UCC_DT_PREDEFINED_ID(UCC_DT_FLOAT64)]          = SHARP_DTYPE_DOUBLE,
+    [UCC_DT_PREDEFINED_ID(UCC_DT_FLOAT128)]         = SHARP_DTYPE_NULL,
+#if SHARP_API > SHARP_VERSION(3, 0)
+    [UCC_DT_PREDEFINED_ID(UCC_DT_INT8)]             = (enum sharp_datatype)SHARP_DTYPE_UNKNOWN,
+    [UCC_DT_PREDEFINED_ID(UCC_DT_UINT8)]            = (enum sharp_datatype)SHARP_DTYPE_UNKNOWN,
+    [UCC_DT_PREDEFINED_ID(UCC_DT_BFLOAT16)]         = (enum sharp_datatype)SHARP_DTYPE_UNKNOWN,
+#else
+    [UCC_DT_PREDEFINED_ID(UCC_DT_INT8)]             = SHARP_DTYPE_NULL,
+    [UCC_DT_PREDEFINED_ID(UCC_DT_UINT8)]            = SHARP_DTYPE_NULL,
     [UCC_DT_PREDEFINED_ID(UCC_DT_BFLOAT16)]         = SHARP_DTYPE_NULL,
+#endif
     [UCC_DT_PREDEFINED_ID(UCC_DT_FLOAT32_COMPLEX)]  = SHARP_DTYPE_NULL,
     [UCC_DT_PREDEFINED_ID(UCC_DT_FLOAT64_COMPLEX)]  = SHARP_DTYPE_NULL,
     [UCC_DT_PREDEFINED_ID(UCC_DT_FLOAT128_COMPLEX)] = SHARP_DTYPE_NULL,
@@ -82,21 +86,26 @@ static inline ucc_status_t ucc_tl_sharp_status_to_ucc(int status)
 static ucc_tl_sharp_reg_t ucc_tl_sharp_reg_null = { .mr = NULL };
 
 static ucc_status_t
-ucc_tl_sharp_mem_register(ucc_tl_sharp_context_t *ctx, void *addr,
-                          size_t length, ucc_tl_sharp_reg_t **reg)
+ucc_tl_sharp_mem_register(ucc_tl_sharp_context_t *ctx, ucc_tl_sharp_team_t *team,
+                          void *addr, size_t length, ucc_tl_sharp_reg_t **reg)
 {
     ucc_rcache_region_t          *rregion;
     ucc_tl_sharp_rcache_region_t *region;
     ucc_status_t                  status;
     ucc_tl_sharp_reg_t           *r;
+    ucc_rcache_t                 *rcache;
+    struct sharp_coll_context    *sharp_ctx;
 
     if (length < ctx->cfg.reg_threshold) {
         *reg = &ucc_tl_sharp_reg_null;
         return UCC_OK;
     }
 
-    if (ctx->rcache) {
-        status = ucc_rcache_get(ctx->rcache, (void *)addr, length, NULL,
+    sharp_ctx = team->sharp_context;
+    rcache    = team->rcache;
+
+    if (rcache) {
+        status = ucc_rcache_get(rcache, (void *)addr, length, NULL,
                                 &rregion);
         if (status != UCC_OK) {
             tl_error(ctx->super.super.lib, "ucc_rcache_get failed");
@@ -111,7 +120,7 @@ ucc_tl_sharp_mem_register(ucc_tl_sharp_context_t *ctx, void *addr,
             return UCC_ERR_NO_MEMORY;
         }
 
-        sharp_coll_reg_mr(ctx->sharp_context, addr, length, &r->mr);
+        sharp_coll_reg_mr(sharp_ctx, addr, length, &r->mr);
         *reg = r;
     }
 
@@ -119,20 +128,24 @@ ucc_tl_sharp_mem_register(ucc_tl_sharp_context_t *ctx, void *addr,
 }
 
 static ucc_status_t
-ucc_tl_sharp_mem_deregister(ucc_tl_sharp_context_t *ctx,
-                            ucc_tl_sharp_reg_t *reg)
+ucc_tl_sharp_mem_deregister(ucc_tl_sharp_team_t *team, ucc_tl_sharp_reg_t *reg)
 {
     ucc_tl_sharp_rcache_region_t *region;
+    ucc_rcache_t *rcache;
+    struct       sharp_coll_context *sharp_ctx;
 
     if (reg == &ucc_tl_sharp_reg_null) {
         return UCC_OK;
     }
 
-    if (ctx->rcache) {
+    sharp_ctx = team->sharp_context;
+    rcache    = team->rcache;
+
+    if (rcache) {
         region = ucc_container_of(reg, ucc_tl_sharp_rcache_region_t, reg);
-        ucc_rcache_region_put(ctx->rcache, &region->super);
+        ucc_rcache_region_put(rcache, &region->super);
     } else {
-        sharp_coll_dereg_mr(ctx->sharp_context, reg->mr);
+        sharp_coll_dereg_mr(sharp_ctx, reg->mr);
         ucc_free(reg);
     }
 
@@ -149,14 +162,15 @@ void ucc_tl_sharp_collective_progress(ucc_coll_task_t *coll_task)
         if (completed) {
             if (TASK_ARGS(task).coll_type == UCC_COLL_TYPE_ALLREDUCE) {
                 if (!UCC_IS_INPLACE(TASK_ARGS(task))) {
-                    ucc_tl_sharp_mem_deregister(TASK_CTX(task),
+                    ucc_tl_sharp_mem_deregister(TASK_TEAM(task),
                                                 task->allreduce.s_mem_h);
                 }
-                ucc_tl_sharp_mem_deregister(TASK_CTX(task),
+                ucc_tl_sharp_mem_deregister(TASK_TEAM(task),
                                             task->allreduce.r_mem_h);
             }
             if (TASK_ARGS(task).coll_type == UCC_COLL_TYPE_BCAST) {
-                ucc_tl_sharp_mem_deregister(TASK_CTX(task), task->bcast.mem_h);
+                ucc_tl_sharp_mem_deregister(TASK_TEAM(task),
+                                            task->bcast.mem_h);
             }
             sharp_coll_req_free(task->req_handle);
             coll_task->status = UCC_OK;
@@ -175,7 +189,7 @@ ucc_status_t ucc_tl_sharp_barrier_start(ucc_coll_task_t *coll_task)
     UCC_TL_SHARP_PROFILE_REQUEST_EVENT(coll_task, "sharp_barrier_start", 0);
 
     ret = sharp_coll_do_barrier_nb(team->sharp_comm, &task->req_handle);
-    if (ret != SHARP_COLL_SUCCESS) {
+    if (ucc_unlikely(ret != SHARP_COLL_SUCCESS)) {
         tl_error(UCC_TASK_LIB(task), "sharp_coll_do_barrier_nb failed:%s",
                  sharp_coll_strerror(ret));
         coll_task->status = ucc_tl_sharp_status_to_ucc(ret);
@@ -206,11 +220,11 @@ ucc_status_t ucc_tl_sharp_allreduce_start(ucc_coll_task_t *coll_task)
     data_size  = ucc_dt_size(dt) * count;
 
     if (!UCC_IS_INPLACE(*args)) {
-        ucc_tl_sharp_mem_register(TASK_CTX(task), args->src.info.buffer,
-                                  data_size, &task->allreduce.s_mem_h);
+        ucc_tl_sharp_mem_register(TASK_CTX(task), team, args->src.info.buffer,data_size,
+                                  &task->allreduce.s_mem_h);
     }
-    ucc_tl_sharp_mem_register(TASK_CTX(task), args->dst.info.buffer,
-                              data_size, &task->allreduce.r_mem_h);
+    ucc_tl_sharp_mem_register(TASK_CTX(task), team, args->dst.info.buffer, data_size,
+                              &task->allreduce.r_mem_h);
 
     if (!UCC_IS_INPLACE(*args)) {
         reduce_spec.sbuf_desc.buffer.ptr        = args->src.info.buffer;
@@ -235,7 +249,7 @@ ucc_status_t ucc_tl_sharp_allreduce_start(ucc_coll_task_t *coll_task)
     reduce_spec.op                          = op_type;
 
     ret = sharp_coll_do_allreduce_nb(team->sharp_comm, &reduce_spec, &task->req_handle);
-    if (ret != SHARP_COLL_SUCCESS) {
+    if (ucc_unlikely(ret != SHARP_COLL_SUCCESS)) {
         tl_error(UCC_TASK_LIB(task), "sharp_coll_do_allreduce_nb failed:%s",
                  sharp_coll_strerror(ret));
         coll_task->status = ucc_tl_sharp_status_to_ucc(ret);
@@ -262,8 +276,8 @@ ucc_status_t ucc_tl_sharp_bcast_start(ucc_coll_task_t *coll_task)
 
     data_size = ucc_dt_size(dt) * count;
 
-    ucc_tl_sharp_mem_register(TASK_CTX(task), args->src.info.buffer, data_size,
-                              &task->bcast.mem_h);
+    ucc_tl_sharp_mem_register(TASK_CTX(task), team, args->src.info.buffer,
+                              data_size, &task->bcast.mem_h);
 
     bcast_spec.size                       = data_size;
     bcast_spec.root                       = root;
@@ -277,8 +291,85 @@ ucc_status_t ucc_tl_sharp_bcast_start(ucc_coll_task_t *coll_task)
     ret = sharp_coll_do_bcast_nb(team->sharp_comm, &bcast_spec,
                                  &task->req_handle);
 
+    if (ucc_unlikely(ret != SHARP_COLL_SUCCESS)) {
+        if (ret == SHARP_COLL_ENOT_SUPP) {
+            tl_debug(UCC_TASK_LIB(task),
+                     "sharp_coll_do_bcast_nb not supported, msgsize %zd",
+                     data_size);
+        } else {
+            tl_error(UCC_TASK_LIB(task), "sharp_coll_do_bcast_nb failed:%s",
+                     sharp_coll_strerror(ret));
+        }
+        coll_task->status = ucc_tl_sharp_status_to_ucc(ret);
+        return ucc_task_complete(coll_task);
+    }
+    coll_task->status = UCC_INPROGRESS;
+
+    return ucc_progress_queue_enqueue(UCC_TL_CORE_CTX(team)->pq, &task->super);
+}
+
+#if HAVE_DECL_SHARP_COLL_DO_REDUCE_SCATTER
+ucc_status_t ucc_tl_sharp_reduce_scatter_start(ucc_coll_task_t *coll_task)
+{
+    ucc_tl_sharp_task_t *task  = ucc_derived_of(coll_task, ucc_tl_sharp_task_t);
+    ucc_tl_sharp_team_t *team  = TASK_TEAM(task);
+    ucc_coll_args_t     *args  = &TASK_ARGS(task);
+    size_t              count = args->dst.info.count;
+    ucc_datatype_t      dt    = args->dst.info.datatype;
+    struct sharp_coll_reduce_spec reduce_spec;
+    enum sharp_datatype           sharp_type;
+    enum sharp_reduce_op          op_type;
+    size_t                        src_data_size, dst_data_size;
+    int                           ret;
+
+    UCC_TL_SHARP_PROFILE_REQUEST_EVENT(coll_task, "sharp_reduce_scatter_start",
+                                       0);
+
+    sharp_type    = ucc_to_sharp_dtype[UCC_DT_PREDEFINED_ID(dt)];
+    op_type       = ucc_to_sharp_reduce_op[args->op];
+    src_data_size = ucc_dt_size(dt) * count * UCC_TL_TEAM_SIZE(team);
+    dst_data_size = ucc_dt_size(dt) * count;
+
+    if (!UCC_IS_INPLACE(*args)) {
+        ucc_tl_sharp_mem_register(TASK_CTX(task), team, args->src.info.buffer,
+                                  src_data_size, &task->reduce_scatter.s_mem_h);
+    }
+    ucc_tl_sharp_mem_register(TASK_CTX(task), team, args->dst.info.buffer,
+                              dst_data_size, &task->reduce_scatter.r_mem_h);
+
+    if (!UCC_IS_INPLACE(*args)) {
+        reduce_spec.sbuf_desc.buffer.ptr = args->src.info.buffer;
+        reduce_spec.sbuf_desc.buffer.mem_handle =
+            task->reduce_scatter.s_mem_h->mr;
+        reduce_spec.sbuf_desc.mem_type =
+            ucc_to_sharp_memtype[args->src.info.mem_type];
+    } else {
+        reduce_spec.sbuf_desc.buffer.ptr = args->dst.info.buffer;
+        reduce_spec.sbuf_desc.buffer.mem_handle =
+            task->reduce_scatter.r_mem_h->mr;
+        reduce_spec.sbuf_desc.mem_type =
+            ucc_to_sharp_memtype[args->dst.info.mem_type];
+    }
+
+    reduce_spec.sbuf_desc.buffer.length     = src_data_size;
+    reduce_spec.sbuf_desc.type              = SHARP_DATA_BUFFER;
+    reduce_spec.rbuf_desc.buffer.ptr        = args->dst.info.buffer;
+    reduce_spec.rbuf_desc.buffer.length     = dst_data_size;
+    reduce_spec.rbuf_desc.buffer.mem_handle = task->reduce_scatter.r_mem_h->mr;
+    reduce_spec.rbuf_desc.type              = SHARP_DATA_BUFFER;
+    reduce_spec.rbuf_desc.mem_type =
+        ucc_to_sharp_memtype[args->dst.info.mem_type];
+    reduce_spec.aggr_mode = SHARP_AGGREGATION_NONE;
+    reduce_spec.length    = count;
+    reduce_spec.dtype     = sharp_type;
+    reduce_spec.op        = op_type;
+    reduce_spec.offset    = 0;
+
+    ret = sharp_coll_do_reduce_scatter_nb(team->sharp_comm, &reduce_spec,
+                                          &task->req_handle);
     if (ret != SHARP_COLL_SUCCESS) {
-        tl_error(UCC_TASK_LIB(task), "sharp_coll_do_bcast_nb failed:%s",
+        tl_error(UCC_TASK_LIB(task),
+                 "sharp_coll_do_reduce_scatter_nb failed:%s",
                  sharp_coll_strerror(ret));
         coll_task->status = ucc_tl_sharp_status_to_ucc(ret);
         return ucc_task_complete(coll_task);
@@ -288,15 +379,39 @@ ucc_status_t ucc_tl_sharp_bcast_start(ucc_coll_task_t *coll_task)
     return ucc_progress_queue_enqueue(UCC_TL_CORE_CTX(team)->pq, &task->super);
 }
 
+ucc_status_t ucc_tl_sharp_reduce_scatter_init(ucc_tl_sharp_task_t *task)
+{
+    ucc_coll_args_t *args = &TASK_ARGS(task);
+
+    if (!ucc_coll_args_is_predefined_dt(args, UCC_RANK_INVALID)) {
+        return UCC_ERR_NOT_SUPPORTED;
+    }
+
+    if ((!UCC_IS_INPLACE(*args) &&
+        ucc_to_sharp_memtype[args->src.info.mem_type] == SHARP_MEM_TYPE_LAST) ||
+        ucc_to_sharp_memtype[args->dst.info.mem_type] == SHARP_MEM_TYPE_LAST ||
+        ucc_to_sharp_dtype[UCC_DT_PREDEFINED_ID(args->dst.info.datatype)] ==
+            SHARP_DTYPE_NULL ||
+        ucc_to_sharp_reduce_op[args->op] == SHARP_OP_NULL) {
+        return UCC_ERR_NOT_SUPPORTED;
+    }
+
+    task->super.post     = ucc_tl_sharp_reduce_scatter_start;
+    task->super.progress = ucc_tl_sharp_collective_progress;
+    return UCC_OK;
+};
+#endif
+
 ucc_status_t ucc_tl_sharp_allreduce_init(ucc_tl_sharp_task_t *task)
 {
     ucc_coll_args_t *args = &TASK_ARGS(task);
 
-    if (!UCC_DT_IS_PREDEFINED(args->dst.info.datatype)) {
+    if (!ucc_coll_args_is_predefined_dt(args, UCC_RANK_INVALID)) {
         return UCC_ERR_NOT_SUPPORTED;
     }
 
-    if (ucc_to_sharp_memtype[args->src.info.mem_type] == SHARP_MEM_TYPE_LAST ||
+    if ((!UCC_IS_INPLACE(*args) &&
+         ucc_to_sharp_memtype[args->src.info.mem_type] == SHARP_MEM_TYPE_LAST) ||
         ucc_to_sharp_memtype[args->dst.info.mem_type] == SHARP_MEM_TYPE_LAST ||
         ucc_to_sharp_dtype[UCC_DT_PREDEFINED_ID(args->dst.info.datatype)] == SHARP_DTYPE_NULL ||
         ucc_to_sharp_reduce_op[args->op] == SHARP_OP_NULL) {
@@ -310,15 +425,17 @@ ucc_status_t ucc_tl_sharp_allreduce_init(ucc_tl_sharp_task_t *task)
 
 ucc_status_t ucc_tl_sharp_bcast_init(ucc_tl_sharp_task_t *task)
 {
-    ucc_coll_args_t *args = &TASK_ARGS(task);
+    ucc_coll_args_t *args  = &TASK_ARGS(task);
+    size_t           data_size;
 
-    if (!UCC_DT_IS_PREDEFINED(args->src.info.datatype)) {
-        return UCC_ERR_NOT_SUPPORTED;
-    }
+    data_size = ucc_dt_size(args->src.info.datatype) * args->src.info.count;
 
-    if (ucc_to_sharp_memtype[args->src.info.mem_type] == SHARP_MEM_TYPE_LAST ||
-        ucc_to_sharp_dtype[UCC_DT_PREDEFINED_ID(args->src.info.datatype)] ==
-            SHARP_DTYPE_NULL) {
+    /* check SHARP supports memory type, dataype is contig and
+       data size is even in case of older sharp versions */
+    if ((ucc_to_sharp_memtype[args->src.info.mem_type] == SHARP_MEM_TYPE_LAST) ||
+        !ucc_coll_args_is_predefined_dt(args, UCC_RANK_INVALID) ||
+        ((data_size % 2 != 0) &&
+        ucc_to_sharp_dtype[UCC_DT_PREDEFINED_ID(UCC_DT_INT8)] == SHARP_DTYPE_NULL)) {
         return UCC_ERR_NOT_SUPPORTED;
     }
 

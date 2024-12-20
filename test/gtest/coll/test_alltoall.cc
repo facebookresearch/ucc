@@ -54,9 +54,11 @@ public:
                 work_buf    = (long *)team->procs[i].p->onesided_buf[2];
                 coll->mask  = UCC_COLL_ARGS_FIELD_FLAGS |
                              UCC_COLL_ARGS_FIELD_GLOBAL_WORK_BUFFER;
-                coll->src.info.buffer = sbuf;
-                coll->dst.info.buffer = rbuf;
-                coll->flags           = UCC_COLL_ARGS_FLAG_MEM_MAPPED_BUFFERS;
+                coll->flags = UCC_COLL_ARGS_FLAG_MEM_MAPPED_BUFFERS;
+                coll->src.info.buffer    = sbuf;
+                coll->src.info.mem_type  = UCC_MEMORY_TYPE_HOST;
+                coll->dst.info.buffer    = rbuf;
+                coll->dst.info.mem_type  = UCC_MEMORY_TYPE_HOST;
                 coll->global_work_buffer = work_buf;
             } else {
                 UCC_CHECK(ucc_mc_alloc(
@@ -277,7 +279,8 @@ INSTANTIATE_TEST_CASE_P(
         ::testing::Range(1, UccJob::nStaticTeams), // team_ids
         PREDEFINED_DTYPES,
 #ifdef HAVE_CUDA
-        ::testing::Values(UCC_MEMORY_TYPE_HOST, UCC_MEMORY_TYPE_CUDA),
+        ::testing::Values(UCC_MEMORY_TYPE_HOST, UCC_MEMORY_TYPE_CUDA,
+                          UCC_MEMORY_TYPE_CUDA_MANAGED),
 #else
         ::testing::Values(UCC_MEMORY_TYPE_HOST),
 #endif
@@ -322,7 +325,8 @@ INSTANTIATE_TEST_CASE_P(
     ::testing::Combine(
         PREDEFINED_DTYPES,
 #ifdef HAVE_CUDA
-        ::testing::Values(UCC_MEMORY_TYPE_HOST, UCC_MEMORY_TYPE_CUDA),
+        ::testing::Values(UCC_MEMORY_TYPE_HOST, UCC_MEMORY_TYPE_CUDA,
+                          UCC_MEMORY_TYPE_CUDA_MANAGED),
 #else
         ::testing::Values(UCC_MEMORY_TYPE_HOST),
 #endif

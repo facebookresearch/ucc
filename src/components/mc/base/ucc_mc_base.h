@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2020-2021, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2020-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  *
  * See file LICENSE for terms.
  */
@@ -71,7 +71,9 @@ typedef struct ucc_mem_attr {
  * UCC memory component attributes field mask
  */
 typedef enum ucc_mc_attr_field {
-    UCC_MC_ATTR_FIELD_THREAD_MODE = UCC_BIT(0)
+    UCC_MC_ATTR_FIELD_THREAD_MODE      = UCC_BIT(0),
+ /* size of memory pool chunk element */
+    UCC_MC_ATTR_FIELD_FAST_ALLOC_SIZE  = UCC_BIT(1),
 }  ucc_mc_attr_field_t;
 
 typedef struct ucc_mc_attr {
@@ -81,6 +83,7 @@ typedef struct ucc_mc_attr {
      */
     uint64_t          field_mask;
     ucc_thread_mode_t thread_mode;
+    size_t            fast_alloc_size;
 } ucc_mc_attr_t;
 
 /**
@@ -100,11 +103,13 @@ extern ucc_config_field_t ucc_mc_config_table[];
 
 typedef struct ucc_mc_ops {
     ucc_status_t (*mem_query)(const void *ptr, ucc_mem_attr_t *mem_attr);
-    ucc_status_t (*mem_alloc)(ucc_mc_buffer_header_t **h_ptr, size_t size);
+    ucc_status_t (*mem_alloc)(ucc_mc_buffer_header_t **h_ptr, size_t size,
+                              ucc_memory_type_t mt);
     ucc_status_t (*mem_free)(ucc_mc_buffer_header_t *h_ptr);
     ucc_status_t (*memcpy)(void *dst, const void *src, size_t len,
                            ucc_memory_type_t dst_mem,
                            ucc_memory_type_t src_mem);
+    ucc_status_t (*memset)(void *dst, int value, size_t len);
     ucc_status_t (*flush)();
  } ucc_mc_ops_t;
 

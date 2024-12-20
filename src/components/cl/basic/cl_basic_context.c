@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2020, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2020-2024, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  *
  * See file LICENSE for terms.
  */
@@ -23,42 +23,42 @@ UCC_CLASS_INIT_FUNC(ucc_cl_basic_context_t,
         tls = &params->context->all_tls;
     }
 
-    self->tl_ctxs = ucc_malloc(sizeof(ucc_tl_context_t*) * tls->count,
+    self->super.tl_ctxs = ucc_malloc(sizeof(ucc_tl_context_t*) * tls->count,
                                "cl_basic_tl_ctxs");
-    if (!self->tl_ctxs) {
+    if (!self->super.tl_ctxs) {
         cl_error(cl_config->cl_lib, "failed to allocate %zd bytes for tl_ctxs",
                  sizeof(ucc_tl_context_t**) * tls->count);
         return UCC_ERR_NO_MEMORY;
     }
-    self->n_tl_ctxs = 0;
+    self->super.n_tl_ctxs = 0;
     for (i = 0; i < tls->count; i++) {
         status = ucc_tl_context_get(params->context, tls->names[i],
-                                    &self->tl_ctxs[self->n_tl_ctxs]);
+                                   &self->super.tl_ctxs[self->super.n_tl_ctxs]);
         if (UCC_OK != status) {
-            cl_info(cl_config->cl_lib,
-                    "TL %s context is not available, skipping", tls->names[i]);
+            cl_debug(cl_config->cl_lib,
+                     "TL %s context is not available, skipping", tls->names[i]);
         } else {
-            self->n_tl_ctxs++;
+            self->super.n_tl_ctxs++;
         }
     }
-    if (0 == self->n_tl_ctxs) {
+    if (0 == self->super.n_tl_ctxs) {
         cl_error(cl_config->cl_lib, "no TL contexts are available");
-        ucc_free(self->tl_ctxs);
-        self->tl_ctxs = NULL;
+        ucc_free(self->super.tl_ctxs);
+        self->super.tl_ctxs = NULL;
         return UCC_ERR_NOT_FOUND;
     }
-    cl_info(cl_config->cl_lib, "initialized cl context: %p", self);
+    cl_debug(cl_config->cl_lib, "initialized cl context: %p", self);
     return UCC_OK;
 }
 
 UCC_CLASS_CLEANUP_FUNC(ucc_cl_basic_context_t)
 {
     int i;
-    cl_info(self->super.super.lib, "finalizing cl context: %p", self);
-    for (i = 0; i < self->n_tl_ctxs; i++) {
-        ucc_tl_context_put(self->tl_ctxs[i]);
+    cl_debug(self->super.super.lib, "finalizing cl context: %p", self);
+    for (i = 0; i < self->super.n_tl_ctxs; i++) {
+        ucc_tl_context_put(self->super.tl_ctxs[i]);
     }
-    ucc_free(self->tl_ctxs);
+    ucc_free(self->super.tl_ctxs);
 }
 
 UCC_CLASS_DEFINE(ucc_cl_basic_context_t, ucc_cl_context_t);
@@ -73,20 +73,18 @@ ucc_cl_basic_get_context_attr(const ucc_base_context_t *context,
     ucc_status_t        status;
     int                 i;
 
-    if (attr->attr.mask & UCC_CONTEXT_ATTR_FIELD_CTX_ADDR_LEN) {
-        attr->attr.ctx_addr_len = 0;
-    }
+    ucc_base_ctx_attr_clear(attr);
 
     /* CL BASIC reports topo_required if any of the TL available
-       TL contexts needs it */
-    attr->topo_required = 0;
-    for (i = 0; i < ctx->n_tl_ctxs; i++) {
+     * TL contexts needs it
+     */
+    for (i = 0; i < ctx->super.n_tl_ctxs; i++) {
         memset(&tl_attr, 0, sizeof(tl_attr));
-        status = UCC_TL_CTX_IFACE(ctx->tl_ctxs[i])
-                     ->context.get_attr(&ctx->tl_ctxs[i]->super, &tl_attr);
+        status = UCC_TL_CTX_IFACE(ctx->super.tl_ctxs[i])
+                    ->context.get_attr(&ctx->super.tl_ctxs[i]->super, &tl_attr);
         if (UCC_OK != status) {
             cl_error(ctx->super.super.lib, "failed to get %s ctx attr",
-                     UCC_TL_CTX_IFACE(ctx->tl_ctxs[i])->super.name);
+                     UCC_TL_CTX_IFACE(ctx->super.tl_ctxs[i])->super.name);
             return status;
         }
         if (tl_attr.topo_required) {

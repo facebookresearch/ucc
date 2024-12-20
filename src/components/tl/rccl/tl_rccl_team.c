@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2021, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2021-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * Copyright (c) Facebook, Inc. and its affiliates. 2021.
  * Copyright (C) Advanced Micro Devices, Inc. 2022. ALL RIGHTS RESERVED.
  *
@@ -55,7 +55,7 @@ free_unique_id:
 
 UCC_CLASS_CLEANUP_FUNC(ucc_tl_rccl_team_t)
 {
-    tl_info(self->super.super.context->lib, "finalizing tl team: %p", self);
+    tl_debug(self->super.super.context->lib, "finalizing tl team: %p", self);
     if (self->rccl_comm) {
         ncclCommDestroy(self->rccl_comm);
         hipStreamDestroy(self->stream);
@@ -105,13 +105,13 @@ ucc_status_t ucc_tl_rccl_team_create_test(ucc_base_team_t *tl_team)
     rccl_status = ncclCommInitRank(&team->rccl_comm, UCC_TL_TEAM_SIZE(team),
                                    team->unique_id[0], UCC_TL_TEAM_RANK(team));
     if (rccl_status != ncclSuccess) {
-        tl_info(tl_team->context->lib, "RCCL error %d %s",
-                rccl_status, ncclGetErrorString(rccl_status));
+        tl_debug(tl_team->context->lib, "RCCL error %d %s",
+                 rccl_status, ncclGetErrorString(rccl_status));
         status = UCC_ERR_NO_MESSAGE;
         goto free_stream;
     }
     ucc_free(team->unique_id);
-    tl_info(tl_team->context->lib, "initialized tl team: %p", team);
+    tl_debug(tl_team->context->lib, "initialized tl team: %p", team);
     return UCC_OK;
 
 free_stream:
@@ -183,7 +183,7 @@ ucc_status_t ucc_tl_rccl_coll_init(ucc_base_coll_args_t *coll_args,
     if (ucc_unlikely(status != UCC_OK)) {
         goto free_task;
     }
-    tl_info(UCC_TASK_LIB(task), "init coll task %p", task);
+    tl_debug(UCC_TASK_LIB(task), "init coll task %p", task);
     *task_h = &task->super;
     return status;
 
@@ -201,7 +201,15 @@ ucc_status_t ucc_tl_rccl_team_get_scores(ucc_base_team_t   *tl_team,
     ucc_coll_score_t   *score;
     ucc_status_t        status;
     int                 i;
+    ucc_coll_score_team_info_t team_info;
 
+    team_info.alg_fn              = ucc_tl_rccl_alg_id_to_init;
+    team_info.default_score       = UCC_TL_RCCL_DEFAULT_SCORE;
+    team_info.init                = ucc_tl_rccl_coll_init;
+    team_info.num_mem_types       = 1;
+    team_info.supported_mem_types = &mt;
+    team_info.supported_colls     = UCC_TL_RCCL_SUPPORTED_COLLS;
+    team_info.size                = UCC_TL_TEAM_SIZE(team);
     /* There can be a different logic for different coll_type/mem_type.
        Right now just init everything the same way. */
     status =
@@ -214,9 +222,8 @@ ucc_status_t ucc_tl_rccl_team_get_scores(ucc_base_team_t   *tl_team,
 
     for (i = 0; i < UCC_TL_RCCL_N_DEFAULT_ALG_SELECT_STR; i++) {
         status = ucc_coll_score_update_from_str(
-            ucc_tl_rccl_default_alg_select_str[i], score, UCC_TL_TEAM_SIZE(team),
-            ucc_tl_rccl_coll_init, &team->super.super, UCC_TL_RCCL_DEFAULT_SCORE,
-            ucc_tl_rccl_alg_id_to_init);
+            ucc_tl_rccl_default_alg_select_str[i], &team_info,
+            &team->super.super, score);
         if (ucc_unlikely(UCC_OK != status)) {
             tl_error(tl_team->context->lib,
                      "failed to apply default coll select setting: %s",
@@ -235,10 +242,8 @@ ucc_status_t ucc_tl_rccl_team_get_scores(ucc_base_team_t   *tl_team,
     }
 
     if (strlen(ctx->score_str) > 0) {
-        status = ucc_coll_score_update_from_str(
-            ctx->score_str, score, UCC_TL_TEAM_SIZE(team),
-            ucc_tl_rccl_coll_init, &team->super.super,
-            UCC_TL_RCCL_DEFAULT_SCORE, ucc_tl_rccl_alg_id_to_init);
+        status = ucc_coll_score_update_from_str(ctx->score_str, &team_info,
+                                                &team->super.super, score);
         /* If INVALID_PARAM - User provided incorrect input - try to proceed */
         if ((status < 0) && (status != UCC_ERR_INVALID_PARAM) &&
             (status != UCC_ERR_NOT_SUPPORTED)) {

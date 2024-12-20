@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2021, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2021-2024, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  *
  * See file LICENSE for terms.
  */
@@ -10,13 +10,6 @@
 #include <tl_cuda_topo.h>
 #include <cuda_runtime.h>
 #include <cuda.h>
-
-static ucc_mpool_ops_t ucc_tl_cuda_req_mpool_ops = {
-    .chunk_alloc   = ucc_mpool_hugetlb_malloc,
-    .chunk_release = ucc_mpool_hugetlb_free,
-    .obj_init      = NULL,
-    .obj_cleanup   = NULL,
-};
 
 UCC_CLASS_INIT_FUNC(ucc_tl_cuda_context_t,
                     const ucc_base_context_params_t *params,
@@ -36,24 +29,24 @@ UCC_CLASS_INIT_FUNC(ucc_tl_cuda_context_t,
 
     cuda_st = cudaGetDeviceCount(&num_devices);
     if (cuda_st != cudaSuccess) {
-        tl_info(self->super.super.lib, "failed to get number of GPU devices"
-                "%d %s", cuda_st, cudaGetErrorName(cuda_st));
-        return UCC_ERR_NO_MESSAGE;
+        tl_debug(self->super.super.lib, "failed to get number of GPU devices"
+                 "%d %s", cuda_st, cudaGetErrorName(cuda_st));
+        return UCC_ERR_NO_RESOURCE;
     } else if (num_devices == 0) {
-        tl_info(self->super.super.lib, "no GPU devices found");
+        tl_debug(self->super.super.lib, "no GPU devices found");
         return UCC_ERR_NO_RESOURCE;
     }
 
     cu_st = cuCtxGetCurrent(&cu_ctx);
     if (cu_ctx == NULL || cu_st != CUDA_SUCCESS) {
-        tl_info(self->super.super.lib,
-                "cannot create CUDA TL context without active CUDA context");
+        tl_debug(self->super.super.lib,
+                 "cannot create CUDA TL context without active CUDA context");
         return UCC_ERR_NO_RESOURCE;
     }
 
     status = ucc_mpool_init(&self->req_mp, 0, sizeof(ucc_tl_cuda_task_t), 0,
                             UCC_CACHE_LINE_SIZE, 8, UINT_MAX,
-                            &ucc_tl_cuda_req_mpool_ops, params->thread_mode,
+                            &ucc_coll_task_mpool_ops, params->thread_mode,
                             "tl_cuda_req_mp");
     if (status != UCC_OK) {
         tl_error(self->super.super.lib,
@@ -68,15 +61,14 @@ UCC_CLASS_INIT_FUNC(ucc_tl_cuda_context_t,
                  "failed to initialize tl_cuda_topo");
         goto free_mpool;
     }
-    status = ucc_tl_cuda_topo_get_pci_id(self->super.super.lib, self->device,
-                                         &self->device_id);
+    status = ucc_tl_cuda_topo_get_pci_id(self->device, &self->device_id);
     if (status != UCC_OK) {
         tl_error(self->super.super.lib, "failed to get pci id");
         goto free_mpool;
     }
 
     self->ipc_cache = kh_init(tl_cuda_ep_hash);
-    tl_info(self->super.super.lib, "initialized tl context: %p", self);
+    tl_debug(self->super.super.lib, "initialized tl context: %p", self);
     return UCC_OK;
 
 free_mpool:
@@ -86,7 +78,7 @@ free_mpool:
 
 UCC_CLASS_CLEANUP_FUNC(ucc_tl_cuda_context_t)
 {
-    tl_info(self->super.super.lib, "finalizing tl context: %p", self);
+    tl_debug(self->super.super.lib, "finalizing tl context: %p", self);
     ucc_tl_cuda_topo_destroy(self->topo);
     ucc_mpool_cleanup(&self->req_mp, 1);
 }
@@ -97,9 +89,7 @@ ucc_status_t
 ucc_tl_cuda_get_context_attr(const ucc_base_context_t *context, /* NOLINT */
                              ucc_base_ctx_attr_t      *attr)
 {
-    if (attr->attr.mask & UCC_CONTEXT_ATTR_FIELD_CTX_ADDR_LEN) {
-        attr->attr.ctx_addr_len = 0;
-    }
+    ucc_base_ctx_attr_clear(attr);
     attr->topo_required = 1;
     return UCC_OK;
 }

@@ -20,6 +20,15 @@ ucc_base_coll_alg_info_t
              .name = "sra_knomial",
              .desc = "recursive knomial scatter-reduce followed by knomial "
                      "allgather (optimized for BW)"},
+        [UCC_TL_UCP_ALLREDUCE_ALG_DBT] =
+            {.id   = UCC_TL_UCP_ALLREDUCE_ALG_DBT,
+             .name = "dbt",
+             .desc = "alreduce over double binary tree where a leaf in one tree "
+                     "will be intermediate in other (optimized for BW)"},
+        [UCC_TL_UCP_ALLREDUCE_ALG_SLIDING_WINDOW] =
+            {.id   = UCC_TL_UCP_ALLREDUCE_ALG_SLIDING_WINDOW,
+             .name = "sliding_window",
+             .desc = "sliding window allreduce (optimized for running on DPU)"},
         [UCC_TL_UCP_ALLREDUCE_ALG_LAST] = {
             .id = 0, .name = NULL, .desc = NULL}};
 

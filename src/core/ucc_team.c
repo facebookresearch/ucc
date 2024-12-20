@@ -1,6 +1,7 @@
 /**
- * Copyright (c) 2020, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2020-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * Copyright (c) Meta Platforms, Inc. and affiliates. 2022.
+ *
  * See file LICENSE for terms.
  */
 
@@ -86,7 +87,6 @@ static ucc_status_t ucc_team_create_post_single(ucc_context_t *context,
     team->state                   = (team->size > 1) ? UCC_TEAM_ADDR_EXCHANGE
                                                      : UCC_TEAM_CL_CREATE;
     team->last_team_create_posted = -1;
-    team->status                  = UCC_INPROGRESS;
     return UCC_OK;
 }
 
@@ -187,8 +187,8 @@ ucc_status_t ucc_team_create_post(ucc_context_h *contexts, uint32_t num_contexts
     team->size         = (ucc_rank_t)team_size;
     team->rank         = (ucc_rank_t)team_rank;
     team->seq_num      = 0;
-    team->contexts =
-        ucc_malloc(sizeof(ucc_context_t *) * num_contexts, "ucc_team_ctx");
+    team->contexts     = ucc_malloc(sizeof(ucc_context_t *) * num_contexts,
+                                    "ucc_team_ctx");
     if (!team->contexts) {
         ucc_error("failed to allocate %zd bytes for ucc team contexts array",
                   sizeof(ucc_context_t) * num_contexts);
@@ -213,8 +213,8 @@ err_ctx_alloc:
     return status;
 }
 
-static inline ucc_status_t
-ucc_team_create_service_team(ucc_context_t *context, ucc_team_t *team)
+static ucc_status_t ucc_team_create_service_team(ucc_context_t *context,
+                                                 ucc_team_t *team)
 {
     ucc_status_t status;
     if (context->service_team) {
@@ -256,16 +256,16 @@ ucc_team_create_service_team(ucc_context_t *context, ucc_team_t *team)
     return status;
 }
 
-static inline ucc_status_t
-ucc_team_create_cls(ucc_context_t *context, ucc_team_t *team)
+static ucc_status_t ucc_team_create_cls(ucc_context_t *context,
+                                        ucc_team_t *team)
 {
-    int                    i;
-    ucc_cl_iface_t        *cl_iface;
-    ucc_base_team_t       *b_team;
-    ucc_status_t           status;
+    ucc_cl_iface_t  *cl_iface;
+    ucc_base_team_t *b_team;
+    ucc_status_t     status;
+    ucc_subset_t     subset;
+    int              i;
 
     if (context->topo && !team->topo && team->size > 1) {
-        ucc_subset_t subset;
         /* Context->topo is not NULL if any of the enabled CLs
            reported topo_required through the lib_attr */
         subset.map    = team->ctx_map;
@@ -282,7 +282,7 @@ ucc_team_create_cls(ucc_context_t *context, ucc_team_t *team)
         status   = cl_iface->team.create_test(b_team);
         if (status < 0) {
             team->n_cl_teams--;
-            ucc_info("failed to create CL %s team", cl_iface->super.name);
+            ucc_debug("failed to create CL %s team", cl_iface->super.name);
             cl_iface->team.destroy(b_team);
         } else if (status == UCC_INPROGRESS) {
             return status;
@@ -292,14 +292,14 @@ ucc_team_create_cls(ucc_context_t *context, ucc_team_t *team)
     for (i = team->last_team_create_posted + 1; i < context->n_cl_ctx; i++) {
         cl_iface = UCC_CL_CTX_IFACE(context->cl_ctx[i]);
         status   = cl_iface->team.create_post(&context->cl_ctx[i]->super,
-                                            &team->bp, &b_team);
+                                              &team->bp, &b_team);
         if (status != UCC_OK) {
-            ucc_info("failed to create CL %s team", cl_iface->super.name);
+            ucc_debug("failed to create CL %s team", cl_iface->super.name);
             continue;
         }
         status = cl_iface->team.create_test(b_team);
         if (status < 0) {
-            ucc_info("failed to create CL %s team", cl_iface->super.name);
+            ucc_debug("failed to create CL %s team", cl_iface->super.name);
             cl_iface->team.destroy(b_team);
             continue;
         }
@@ -313,7 +313,7 @@ ucc_team_create_cls(ucc_context_t *context, ucc_team_t *team)
         }
     }
     if (0 == team->n_cl_teams) {
-        ucc_error("No CL teams were created");
+        ucc_error("no CL teams were created");
         return UCC_ERR_NO_MESSAGE;
     }
     return UCC_OK;
@@ -328,11 +328,11 @@ static inline ucc_status_t ucc_team_exchange(ucc_context_t *context,
     if (!context->addr_storage.storage) {
         /* There is no addresses collected on the context
            (can be, e.g., if user did not pass OOB for ctx
-           creation). Need to exchange addresses here*/
-        return ucc_core_addr_exchange(context, NULL, &oob, &team->addr_storage);
+           creation). Need to exchange addresses here */
+        return ucc_core_addr_exchange(context, &oob, &team->addr_storage);
     }
     /* We only need to exchange ctx_ranks and build map to ctx array */
-    ucc_assert(context->addr_storage.storage);
+    ucc_assert(context->addr_storage.storage != NULL);
     if (team->bp.params.mask & UCC_TEAM_PARAM_FIELD_EP_MAP) {
         team->ctx_map = team->bp.params.ep_map;
     } else {
@@ -344,9 +344,9 @@ static inline ucc_status_t ucc_team_exchange(ucc_context_t *context,
                           team->size * sizeof(ucc_rank_t));
                 return UCC_ERR_NO_MEMORY;
             }
-            status =
-                oob.allgather(&context->rank, team->ctx_ranks, sizeof(ucc_rank_t),
-                              oob.coll_info, &team->oob_req);
+            status = oob.allgather(&context->rank, team->ctx_ranks,
+                                   sizeof(ucc_rank_t), oob.coll_info,
+                                   &team->oob_req);
             if (UCC_OK != status) {
                 ucc_error("failed to start oob allgather for proc info exchange");
                 ucc_free(team->ctx_ranks);
@@ -428,8 +428,9 @@ ucc_status_t ucc_team_create_test_single(ucc_context_t *context,
             ((context->cl_flags & UCC_BASE_LIB_FLAG_TEAM_ID_REQUIRED) &&
              (team->id == 0))) {
             /* We need service team either when it is explicitly required
-               by any CL/TL (e.g. CL/HIER) or if TEAM_ID is required but
-               not provided by the user */
+             * by any CL/TL (e.g. CL/HIER) or if TEAM_ID is required but
+             * not provided by the user
+             */
             status = ucc_team_create_service_team(context, team);
             if (UCC_OK != status) {
                 goto out;
@@ -454,20 +455,23 @@ ucc_status_t ucc_team_create_test_single(ucc_context_t *context,
         /* fall through */
     case UCC_TEAM_CL_CREATE:
         status = ucc_team_create_cls(context, team);
+        break;
+    case UCC_TEAM_ACTIVE:
+        return UCC_OK;
     }
 out:
-    team->status = status;
     if (UCC_OK == status) {
+        team->state = UCC_TEAM_ACTIVE;
         status = ucc_team_build_score_map(team);
     }
 
     if (UCC_OK == status &&
         ucc_global_config.log_component.log_level >= UCC_LOG_LEVEL_INFO &&
         team->rank == 0) {
-        ucc_info("===== COLL_SCORE_MAP (team_id %d) =====",
-                 team->id);
+        ucc_info("===== COLL_SCORE_MAP (team_id %d, size %u) =====",
+                 team->id, team->size);
         ucc_coll_score_map_print_info(team->score_map);
-        ucc_info("=======================================");
+        ucc_info("================================================");
     }
     /* TODO: add team/coll selection and check if some teams are never
              used after selection and clean them up */
@@ -482,7 +486,7 @@ ucc_status_t ucc_team_create_test(ucc_team_h team)
     }
     /* we don't support multiple contexts per team yet */
     ucc_assert(team->num_contexts == 1);
-    if (team->status == UCC_OK) {
+    if (team->state == UCC_TEAM_ACTIVE) {
         return UCC_OK;
     }
     return ucc_team_create_test_single(team->contexts[0], team);
@@ -493,6 +497,7 @@ static ucc_status_t ucc_team_destroy_single(ucc_team_h team)
     ucc_cl_iface_t *cl_iface;
     int             i;
     ucc_status_t    status;
+
     if (team->service_team) {
         if (UCC_OK != (status = UCC_TL_CTX_IFACE(team->contexts[0]->service_ctx)
                        ->team.destroy(&team->service_team->super))) {
@@ -518,6 +523,11 @@ static ucc_status_t ucc_team_destroy_single(ucc_team_h team)
         ucc_internal_oob_finalize(&team->bp.params.oob);
     }
 
+    if ((ucc_global_config.log_component.log_level >= UCC_LOG_LEVEL_INFO) &&
+        (team->rank == 0)) {
+        ucc_info("team destroyed, team_id %d", team->id);
+    }
+
     ucc_coll_score_free_map(team->score_map);
     ucc_free(team->addr_storage.storage);
     ucc_free(team->ctx_ranks);
@@ -535,7 +545,7 @@ ucc_status_t ucc_team_destroy(ucc_team_h team)
         return UCC_ERR_INVALID_PARAM;
     }
 
-    if (team->status != UCC_OK) {
+    if (team->state != UCC_TEAM_ACTIVE) {
         ucc_error("team %p is used before team_create is completed", team);
         return UCC_ERR_INVALID_PARAM;
     }
@@ -624,7 +634,7 @@ static ucc_status_t ucc_team_alloc_id(ucc_team_t *team)
     if (pos > 0) {
         ucc_assert(pos <= 64);
         team->id = (uint16_t)(i*64+pos);
-        ucc_info("allocated ID %d for team %p", team->id, team);
+        ucc_debug("allocated ID %d for team %p", team->id, team);
     } else {
         ucc_warn("could not allocate team id, whole id space is occupied, "
                  "try increasing UCC_TEAM_IDS_POOL_SIZE");

@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2022, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2022-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  *
  * See file LICENSE for terms.
  */
@@ -25,18 +25,20 @@ void init_buffer_host(void *buf, size_t count, int _value)
 }
 
 void init_buffer(void *_buf, size_t count, ucc_datatype_t dt,
-                 ucc_memory_type_t mt, int value)
+                 ucc_memory_type_t mt, int value, int offset)
 {
     void *buf = NULL;
     if (mt == UCC_MEMORY_TYPE_CUDA || mt == UCC_MEMORY_TYPE_ROCM) {
         buf = ucc_malloc(count * ucc_dt_size(dt), "buf");
         UCC_MALLOC_CHECK(buf);
-    } else if (mt == UCC_MEMORY_TYPE_HOST) {
+    } else if (mt == UCC_MEMORY_TYPE_HOST || mt == UCC_MEMORY_TYPE_CUDA_MANAGED) {
         buf = _buf;
     } else {
         std::cerr << "Unsupported mt\n";
         MPI_Abort(MPI_COMM_WORLD, -1);
     }
+
+    value += offset;
     switch(dt) {
     case UCC_DT_INT8:
         init_buffer_host<int8_t>(buf, count, value);
@@ -85,7 +87,7 @@ void init_buffer(void *_buf, size_t count, ucc_datatype_t dt,
         MPI_Abort(MPI_COMM_WORLD, -1);
         break;
     }
-    if (UCC_MEMORY_TYPE_HOST != mt) {
+    if (UCC_MEMORY_TYPE_HOST != mt && UCC_MEMORY_TYPE_CUDA_MANAGED != mt) {
         UCC_CHECK(ucc_mc_memcpy(_buf, buf, count * ucc_dt_size(dt),
                                 mt, UCC_MEMORY_TYPE_HOST));
         ucc_free(buf);
@@ -148,7 +150,7 @@ ucc_status_t compare_buffers(void *_rst, void *expected, size_t count,
     ucc_mc_buffer_header_t *rst_mc_header;
     void *rst = NULL;
 
-    if (UCC_MEMORY_TYPE_HOST == mt) {
+    if (UCC_MEMORY_TYPE_HOST == mt || mt == UCC_MEMORY_TYPE_CUDA_MANAGED) {
         rst = _rst;
     } else if (UCC_MEMORY_TYPE_CUDA == mt || UCC_MEMORY_TYPE_ROCM == mt) {
         UCC_ALLOC_COPY_BUF(rst_mc_header, UCC_MEMORY_TYPE_HOST, _rst, mt,
@@ -182,7 +184,7 @@ ucc_status_t compare_buffers(void *_rst, void *expected, size_t count,
             UCC_ERR_NO_MESSAGE : UCC_OK;
     }
 
-    if (UCC_MEMORY_TYPE_HOST != mt) {
+    if (UCC_MEMORY_TYPE_HOST != mt && UCC_MEMORY_TYPE_CUDA_MANAGED != mt) {
         UCC_CHECK(ucc_mc_free(rst_mc_header));
     }
 

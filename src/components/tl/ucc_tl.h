@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2020, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2020-2024, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  *
  * See file LICENSE for terms.
  */
@@ -138,8 +138,18 @@ typedef struct ucc_tl_lib_attr {
 #define UCC_TL_TEAM_IFACE(_tl_team)                                            \
     (ucc_derived_of((_tl_team)->super.context->lib, ucc_tl_lib_t))->iface
 
+/**
+ * Get TL team lib
+ * @param [in] _tl_team pointer to TL team object
+ * @return pointer to TL lib object
+ */
 #define UCC_TL_TEAM_LIB(_tl_team) (_tl_team)->super.super.context->lib
 
+/**
+ * Get TL team context
+ * @param [in] _tl_team pointer to TL team object
+ * @return pointer to TL context object
+ */
 #define UCC_TL_TEAM_CTX(_tl_team) (_tl_team)->super.super.context
 
 #define UCC_TL_CORE_CTX(_tl_team) ((_tl_team)->super.super.context->ucc_context)
@@ -155,4 +165,8 @@ typedef struct ucc_tl_lib_attr {
 #define UCC_TL_TEAM_MAP(_tl_team) (_tl_team)->super.super.params.map
 
 #define UCC_TL_TEAM_OOB(_tl_team) (_tl_team)->super.super.params.params.oob
+
+#define UCC_TL_IS_SERVICE_TEAM(_tl_team)                                       \
+    ((_tl_team)->super.super.params.scope == UCC_CL_LAST + 1)
+
 #endif

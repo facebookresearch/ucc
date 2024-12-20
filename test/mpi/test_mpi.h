@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2021, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2021-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  *
  * See file LICENSE for terms.
  */
@@ -89,6 +89,7 @@ extern int test_rand_seed;
 }
 #endif
 
+#define UCC_TEST_N_PERSISTENT 4
 #define UCC_TEST_N_MEM_SEGMENTS   3
 #define UCC_TEST_MEM_SEGMENT_SIZE (1 << 21)
 
@@ -105,11 +106,6 @@ typedef enum {
     TEAM_SPLIT_ODD_EVEN,
     TEAM_LAST
 } ucc_test_mpi_team_t;
-
-typedef enum {
-    TEST_NO_INPLACE,
-    TEST_INPLACE
-} ucc_test_mpi_inplace_t;
 
 typedef enum {
     ROOT_SINGLE,
@@ -149,7 +145,6 @@ static inline const char* skip_str(test_skip_cause_t s) {
     default:
         return "unknown";
     }
-    return NULL;
 }
 
 static inline const char* team_str(ucc_test_mpi_team_t t) {
@@ -180,6 +175,7 @@ void set_gpu_device(test_set_gpu_device_t set_device);
 #endif
 int ucc_coll_inplace_supported(ucc_coll_type_t c);
 int ucc_coll_is_rooted(ucc_coll_type_t c);
+bool ucc_coll_has_datatype(ucc_coll_type_t c);
 
 typedef struct ucc_test_team {
 #ifdef HAVE_CUDA
@@ -251,7 +247,8 @@ typedef struct ucc_test_team {
 
 struct TestCaseParams {
     size_t msgsize;
-    ucc_test_mpi_inplace_t inplace;
+    bool inplace;
+    bool persistent;
     ucc_datatype_t dt;
     ucc_reduction_op_t op;
     ucc_memory_type_t mt;
@@ -268,8 +265,8 @@ protected:
     ucc_memory_type_t mem_type;
     int root;
     size_t msgsize;
-    ucc_test_mpi_inplace_t inplace;
-    ucc_coll_args_t args;
+    bool inplace;
+    bool persistent;
     ucc_coll_req_h req;
     ucc_mc_buffer_header_t *sbuf_mc_header, *rbuf_mc_header;
     void *sbuf;
@@ -278,7 +275,10 @@ protected:
     MPI_Request progress_request;
     uint8_t     progress_buf[1];
     size_t test_max_size;
+    ucc_datatype_t dt;
+    int iter_persistent;
 public:
+    ucc_coll_args_t args;
     void mpi_progress(void);
     test_skip_cause_t test_skip;
     static std::shared_ptr<TestCase> init_single(
@@ -293,8 +293,7 @@ public:
     TestCase(ucc_test_team_t &_team, ucc_coll_type_t ct, TestCaseParams params);
     virtual ~TestCase();
     virtual void run(bool triggered);
-    virtual ucc_status_t set_input() = 0;
-    virtual ucc_status_t reset_sbuf() = 0;
+    virtual ucc_status_t set_input(int iter_persistent = 0) = 0;
     virtual ucc_status_t check() = 0;
     virtual std::string str();
     virtual ucc_status_t test();
@@ -305,21 +304,23 @@ public:
                                   MPI_Comm comm);
 };
 
+typedef std::tuple<ucc_coll_type_t, ucc_status_t> ucc_test_mpi_result_t;
 class UccTestMpi {
-    ucc_thread_mode_t      tm;
-    ucc_context_h          ctx;
-    ucc_context_h          onesided_ctx;
-    ucc_lib_h              lib;
-    int                    nt;
-    ucc_lib_h              onesided_lib;
-    ucc_test_mpi_inplace_t inplace;
-    ucc_test_mpi_root_t    root_type;
-    int                    root_value;
-    int                    iterations;
-    bool                   verbose;
-    void *                 onesided_buffers[3];
-    size_t                 test_max_size;
-    bool                   triggered;
+    ucc_thread_mode_t         tm;
+    ucc_context_h             ctx;
+    ucc_context_h             onesided_ctx;
+    ucc_lib_h                 lib;
+    int                       nt;
+    ucc_lib_h                 onesided_lib;
+    bool                      inplace;
+    bool                      persistent;
+    ucc_test_mpi_root_t       root_type;
+    int                       root_value;
+    int                       iterations;
+    bool                      verbose;
+    void *                    onesided_buffers[3];
+    size_t                    test_max_size;
+    bool                      triggered;
     void create_team(ucc_test_mpi_team_t t, bool is_onesided = false);
     void destroy_team(ucc_test_team_t &team);
     ucc_team_h create_ucc_team(MPI_Comm comm, bool is_onesided = false);
@@ -331,14 +332,15 @@ class UccTestMpi {
     std::vector<int> gen_roots(ucc_test_team_t &team);
     std::vector<ucc_test_vsize_flag_t> counts_vsize;
     std::vector<ucc_test_vsize_flag_t> displs_vsize;
-    std::vector<ucc_status_t> exec_tests(
+    std::vector<ucc_test_mpi_result_t> exec_tests(
             std::vector<std::shared_ptr<TestCase>> tcs,
-            bool triggered);
+            bool triggered, bool persistent);
 public:
     std::vector<ucc_test_team_t> teams;
     std::vector<ucc_test_team_t> onesided_teams;
-    void run_all_at_team(ucc_test_team_t &team, std::vector<ucc_status_t> &rst);
-    std::vector<ucc_status_t> results;
+    void run_all_at_team(ucc_test_team_t &team,
+                         std::vector<ucc_test_mpi_result_t> &rst);
+    std::vector<ucc_test_mpi_result_t> results;
     UccTestMpi(int argc, char *argv[], ucc_thread_mode_t tm, int is_local,
                bool with_onesided);
     ~UccTestMpi();
@@ -349,9 +351,13 @@ public:
     void set_verbose(bool verbose);
     void set_ops(std::vector<ucc_reduction_op_t> &_ops);
     void set_mtypes(std::vector<ucc_memory_type_t> &_mtypes);
-    void set_inplace(ucc_test_mpi_inplace_t _inplace)
+    void set_inplace(bool _inplace)
     {
         inplace = _inplace;
+    }
+    void set_persistent(bool _persistent)
+    {
+        persistent = _persistent;
     }
     void set_triggered(bool _triggered)
     {
@@ -374,14 +380,16 @@ public:
                       bool                              is_onesided = false);
     void progress_ctx() {
         ucc_context_progress(ctx);
+        if (onesided_ctx) {
+            ucc_context_progress(onesided_ctx);
+        }
     }
 };
 
 class TestAllgather : public TestCase {
 public:
     TestAllgather(ucc_test_team_t &team, TestCaseParams &params);
-    ucc_status_t set_input() override;
-    ucc_status_t reset_sbuf() override;
+    ucc_status_t set_input(int iter_persistent = 0) override;
     ucc_status_t check();
 };
 
@@ -391,27 +399,24 @@ class TestAllgatherv : public TestCase {
 public:
     TestAllgatherv(ucc_test_team_t &team, TestCaseParams &params);
     ~TestAllgatherv();
-    ucc_status_t set_input() override;
-    ucc_status_t reset_sbuf() override;
+    ucc_status_t set_input(int iter_persistent = 0) override;
     ucc_status_t check() override;
 };
 
 class TestAllreduce : public TestCase {
-    ucc_datatype_t dt;
     ucc_reduction_op_t op;
 public:
     TestAllreduce(ucc_test_team_t &team, TestCaseParams &params);
-    ucc_status_t set_input() override;
-    ucc_status_t reset_sbuf() override;
+    ucc_status_t set_input(int iter_persistent = 0) override;
     ucc_status_t check();
     std::string str();
 };
 
 class TestAlltoall : public TestCase {
+    bool is_onesided;
 public:
     TestAlltoall(ucc_test_team_t &team, TestCaseParams &params);
-    ucc_status_t set_input() override;
-    ucc_status_t reset_sbuf() override;
+    ucc_status_t set_input(int iter_persistent = 0) override;
     ucc_status_t check();
 };
 
@@ -433,8 +438,7 @@ class TestAlltoallv : public TestCase {
     void * mpi_counts_to_ucc(int *mpi_counts, size_t _ncount);
 public:
     TestAlltoallv(ucc_test_team_t &team, TestCaseParams &params);
-    ucc_status_t set_input() override;
-    ucc_status_t reset_sbuf() override;
+    ucc_status_t set_input(int iter_persistent = 0) override;
     ucc_status_t check();
     std::string str();
     ~TestAlltoallv();
@@ -444,8 +448,7 @@ class TestBarrier : public TestCase {
     ucc_status_t status;
 public:
     TestBarrier(ucc_test_team_t &team, TestCaseParams &params);
-    ucc_status_t set_input() override;
-    ucc_status_t reset_sbuf() override;
+    ucc_status_t set_input(int iter_persistent = 0) override;
     ucc_status_t check();
     std::string str();
     void run(bool triggered);
@@ -455,16 +458,14 @@ public:
 class TestBcast : public TestCase {
 public:
     TestBcast(ucc_test_team_t &team, TestCaseParams &params);
-    ucc_status_t set_input() override;
-    ucc_status_t reset_sbuf() override;
+    ucc_status_t set_input(int iter_persistent = 0) override;
     ucc_status_t check();
 };
 
 class TestGather : public TestCase {
 public:
     TestGather(ucc_test_team_t &team, TestCaseParams &params);
-    ucc_status_t set_input() override;
-    ucc_status_t reset_sbuf() override;
+    ucc_status_t set_input(int iter_persistent = 0) override;
     ucc_status_t check();
 };
 
@@ -473,43 +474,36 @@ class TestGatherv : public TestCase {
     uint32_t *displacements;
 public:
     TestGatherv(ucc_test_team_t &team, TestCaseParams &params);
-    ucc_status_t set_input() override;
-    ucc_status_t reset_sbuf() override;
+    ucc_status_t set_input(int iter_persistent = 0) override;
     ucc_status_t check();
     ~TestGatherv();
 };
 
 class TestReduce : public TestCase {
-	ucc_datatype_t dt;
 	ucc_reduction_op_t op;
 public:
     TestReduce(ucc_test_team_t &team, TestCaseParams &params);
-    ucc_status_t set_input() override;
-    ucc_status_t reset_sbuf() override;
+    ucc_status_t set_input(int iter_persistent = 0) override;
     ucc_status_t check();
     std::string  str();
 };
 
 class TestReduceScatter : public TestCase {
-    ucc_datatype_t dt;
     ucc_reduction_op_t op;
 public:
     TestReduceScatter(ucc_test_team_t &team, TestCaseParams &params);
-    ucc_status_t set_input() override;
-    ucc_status_t reset_sbuf() override;
+    ucc_status_t set_input(int iter_persistent = 0) override;
     ~TestReduceScatter();
     ucc_status_t check();
     std::string str();
 };
 
 class TestReduceScatterv : public TestCase {
-    ucc_datatype_t     dt;
     ucc_reduction_op_t op;
     int *              counts;
   public:
     TestReduceScatterv(ucc_test_team_t &team, TestCaseParams &params);
-    ucc_status_t set_input() override;
-    ucc_status_t reset_sbuf() override;
+    ucc_status_t set_input(int iter_persistent = 0) override;
     ~TestReduceScatterv();
     ucc_status_t check();
     std::string  str();
@@ -518,8 +512,7 @@ class TestReduceScatterv : public TestCase {
 class TestScatter : public TestCase {
 public:
     TestScatter(ucc_test_team_t &team, TestCaseParams &params);
-    ucc_status_t set_input() override;
-    ucc_status_t reset_sbuf() override;
+    ucc_status_t set_input(int iter_persistent = 0) override;
     ucc_status_t check();
 };
 
@@ -528,14 +521,13 @@ class TestScatterv : public TestCase {
     uint32_t *displacements;
 public:
     TestScatterv(ucc_test_team_t &team, TestCaseParams &params);
-    ucc_status_t set_input() override;
-    ucc_status_t reset_sbuf() override;
+    ucc_status_t set_input(int iter_persistent = 0) override;
     ucc_status_t check();
     ~TestScatterv();
 };
 
 void init_buffer(void *buf, size_t count, ucc_datatype_t dt,
-                 ucc_memory_type_t mt, int value);
+                 ucc_memory_type_t mt, int value, int offset = 0);
 
 ucc_status_t compare_buffers(void *rst, void *expected, size_t count,
                              ucc_datatype_t dt, ucc_memory_type_t mt);

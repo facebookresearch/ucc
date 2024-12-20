@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2021, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2021-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  *
  * See file LICENSE for terms.
  */
@@ -67,7 +67,7 @@ std::shared_ptr<TestCase> TestCase::init_single(ucc_test_team_t &_team,
 void TestCase::run(bool triggered)
 {
     if (triggered) {
-        ucc_ee_h ee;
+        ucc_ee_h ee = nullptr;
         ucc_ev_t comp_ev, *post_ev;
         ucc_ee_type_t ee_type;
 
@@ -129,13 +129,18 @@ std::string TestCase::str() {
     _str += std::string(ucc_coll_type_str(args.coll_type)) +
             " team=" + team_str(team.type) +
             " mtype=" + ucc_memory_type_names[mem_type] +
-            " msgsize=" + std::to_string(msgsize);
+            " msgsize=" + std::to_string(msgsize) +
+            " persistent=" + (persistent ? "1" : "0");
     if (ucc_coll_inplace_supported(args.coll_type)) {
-        _str += std::string(" inplace=") + (inplace == TEST_INPLACE ? "1" : "0");
+        _str += std::string(" inplace=") + (inplace ? "1" : "0");
     }
     if (ucc_coll_is_rooted(args.coll_type)) {
         _str += std::string(" root=") + std::to_string(root);
     }
+    if (ucc_coll_has_datatype(args.coll_type)) {
+        _str += std::string(" dt=") + ucc_datatype_str(dt);
+    }
+
     return _str;
 }
 
@@ -144,7 +149,14 @@ test_skip_cause_t TestCase::skip_reduce(int skip_cond, test_skip_cause_t cause,
 {
     test_skip_cause_t test_skip;
     test_skip_cause_t skip = skip_cond ? cause : TestCase::test_skip;
-    MPI_Allreduce((void*)&skip, (void*)&test_skip, 1, MPI_INT, MPI_MAX, comm);
+    MPI_Request req;
+    int completed;
+
+    MPI_Iallreduce((void*)&skip, (void*)&test_skip, 1, MPI_INT, MPI_MAX, comm, &req);
+    do {
+        MPI_Test(&req, &completed, MPI_STATUS_IGNORE);
+        tc_progress_ctx();
+    } while(!completed);
     TestCase::test_skip = test_skip;
     return test_skip;
 }
@@ -161,8 +173,9 @@ void TestCase::tc_progress_ctx()
 
 TestCase::TestCase(ucc_test_team_t &_team, ucc_coll_type_t ct,
                    TestCaseParams params) :
-    team(_team), mem_type(params.mt),  msgsize(params.msgsize),
-    inplace(params.inplace), test_max_size(params.max_size)
+    team(_team), mem_type(params.mt), msgsize(params.msgsize),
+    inplace(params.inplace), persistent(params.persistent),
+    test_max_size(params.max_size), dt(params.dt)
 {
     int rank;
 
@@ -175,6 +188,16 @@ TestCase::TestCase(ucc_test_team_t &_team, ucc_coll_type_t ct,
     args.flags     = 0;
     args.mask      = 0;
     args.coll_type = ct;
+
+    if (inplace) {
+        args.mask  |= UCC_COLL_ARGS_FIELD_FLAGS;
+        args.flags |= UCC_COLL_ARGS_FLAG_IN_PLACE;
+    }
+
+    if (persistent) {
+        args.mask  |= UCC_COLL_ARGS_FIELD_FLAGS;
+        args.flags |= UCC_COLL_ARGS_FLAG_PERSISTENT;
+    }
 
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Irecv((void*)progress_buf, 1, MPI_CHAR, rank, 0, MPI_COMM_WORLD,

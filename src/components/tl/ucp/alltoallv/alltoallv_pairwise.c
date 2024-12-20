@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2021, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2021-2024, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  *
  * See file LICENSE for terms.
  */
@@ -11,6 +11,9 @@
 #include "utils/ucc_math.h"
 #include "utils/ucc_coll_utils.h"
 #include "tl_ucp_sendrecv.h"
+
+/* TODO: add as parameters */
+#define NP_THRESH 32
 
 static inline ucc_rank_t get_recv_peer(ucc_rank_t rank, ucc_rank_t size,
                                        ucc_rank_t step)
@@ -24,7 +27,26 @@ static inline ucc_rank_t get_send_peer(ucc_rank_t rank, ucc_rank_t size,
     return (rank - step + size) % size;
 }
 
-void ucc_tl_ucp_alltoallv_pairwise_progress(ucc_coll_task_t *coll_task)
+static ucc_rank_t get_num_posts(const ucc_tl_ucp_team_t *team)
+{
+    unsigned long posts = UCC_TL_UCP_TEAM_LIB(team)->cfg.alltoallv_pairwise_num_posts;
+    ucc_rank_t    tsize = UCC_TL_TEAM_SIZE(team);
+
+    if (posts == UCC_ULUNITS_AUTO) {
+        if (UCC_TL_TEAM_SIZE(team) <= NP_THRESH) {
+            /* use linear algorithm */
+            posts = 0;
+        } else {
+            /* use pairwise algorithm */
+            posts = 1;
+        }
+    }
+
+    posts = (posts > tsize || posts == 0) ? tsize: posts;
+    return posts;
+}
+
+static void ucc_tl_ucp_alltoallv_pairwise_progress(ucc_coll_task_t *coll_task)
 {
     ucc_tl_ucp_task_t *task  = ucc_derived_of(coll_task, ucc_tl_ucp_task_t);
     ucc_tl_ucp_team_t *team  = TASK_TEAM(task);
@@ -35,18 +57,16 @@ void ucc_tl_ucp_alltoallv_pairwise_progress(ucc_coll_task_t *coll_task)
     ucc_rank_t         grank = UCC_TL_TEAM_RANK(team);
     ucc_rank_t         gsize = UCC_TL_TEAM_SIZE(team);
     int                polls = 0;
-    ucc_rank_t         peer;
-    int                posts, nreqs;
+    ucc_rank_t         peer, nreqs;
     size_t             rdt_size, sdt_size, data_size, data_displ;
 
-    posts    = UCC_TL_UCP_TEAM_LIB(team)->cfg.alltoallv_pairwise_num_posts;
-    nreqs    = (posts > gsize || posts == 0) ? gsize : posts;
+    nreqs    = get_num_posts(team);
     rdt_size = ucc_dt_size(TASK_ARGS(task).dst.info_v.datatype);
     sdt_size = ucc_dt_size(TASK_ARGS(task).src.info_v.datatype);
     while ((task->tagged.send_posted < gsize ||
             task->tagged.recv_posted < gsize) &&
            (polls++ < task->n_polls)) {
-        ucp_worker_progress(UCC_TL_UCP_TEAM_CTX(team)->ucp_worker);
+        ucp_worker_progress(UCC_TL_UCP_TEAM_CTX(team)->worker.ucp_worker);
         while ((task->tagged.recv_posted < gsize) &&
                ((task->tagged.recv_posted - task->tagged.recv_completed) <
                 nreqs)) {
@@ -94,7 +114,7 @@ out:
     }
 }
 
-ucc_status_t ucc_tl_ucp_alltoallv_pairwise_start(ucc_coll_task_t *coll_task)
+static ucc_status_t ucc_tl_ucp_alltoallv_pairwise_start(ucc_coll_task_t *coll_task)
 {
     ucc_tl_ucp_task_t *task = ucc_derived_of(coll_task, ucc_tl_ucp_task_t);
     ucc_tl_ucp_team_t *team = TASK_TEAM(task);
@@ -114,7 +134,7 @@ ucc_status_t ucc_tl_ucp_alltoallv_pairwise_init_common(ucc_tl_ucp_task_t *task)
     task->super.post     = ucc_tl_ucp_alltoallv_pairwise_start;
     task->super.progress = ucc_tl_ucp_alltoallv_pairwise_progress;
 
-    task->n_polls = ucc_min(1, task->n_polls);
+    task->n_polls = ucc_max(1, task->n_polls);
     if (UCC_TL_UCP_TEAM_CTX(team)->cfg.pre_reg_mem) {
         if (args->flags & UCC_COLL_ARGS_FLAG_CONTIG_SRC_BUFFER) {
             ucc_tl_ucp_pre_register_mem(

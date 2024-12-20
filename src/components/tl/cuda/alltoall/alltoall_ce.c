@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2021-2022, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2021-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * Copyright (c) Meta Platforms, Inc. and affiliates. 2022.
  *
  * See file LICENSE for terms.
@@ -14,14 +14,14 @@
 
 //NOLINTNEXTLINE
 size_t ucc_tl_cuda_alltoall_get_size(const ucc_tl_cuda_task_t *task,
-                                     size_t *cnts, ucc_rank_t block)
+                                     size_t *cnts, ucc_rank_t block) //NOLINT: cnts is unused
 {
     return ucc_dt_size(TASK_ARGS(task).dst.info.datatype) *
            (TASK_ARGS(task).dst.info.count / UCC_TL_TEAM_SIZE(TASK_TEAM(task)));
 }
 
 size_t ucc_tl_cuda_alltoall_get_offset(const ucc_tl_cuda_task_t *task,
-                                       size_t *displ, ucc_rank_t block)
+                                       size_t *displ, ucc_rank_t block) //NOLINT: displ is unused
 {
     return ucc_dt_size(TASK_ARGS(task).dst.info.datatype) *
            (TASK_ARGS(task).dst.info.count /
@@ -67,7 +67,6 @@ ucc_status_t ucc_tl_cuda_alltoall_ce_init(ucc_tl_cuda_task_t *task)
     }
 
     task->super.post           = ucc_tl_cuda_alltoallv_ce_start;
-    task->super.triggered_post = ucc_triggered_post;
     task->super.triggered_post_setup =
         ucc_tl_cuda_alltoallv_ce_triggered_post_setup;
     task->super.progress = ucc_tl_cuda_alltoallv_ce_progress;

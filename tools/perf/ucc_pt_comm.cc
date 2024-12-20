@@ -9,6 +9,7 @@ extern "C" {
 #include "utils/ucc_coll_utils.h"
 #include "components/mc/ucc_mc.h"
 }
+
 ucc_pt_comm::ucc_pt_comm(ucc_pt_comm_config config)
 {
     cfg = config;
@@ -25,12 +26,12 @@ void ucc_pt_comm::set_gpu_device()
     int dev_count = 0;
 
     if (ucc_pt_cudaGetDeviceCount(&dev_count) == 0 && dev_count != 0) {
-	ucc_pt_cudaSetDevice(bootstrap->get_local_rank() % dev_count);
-	return;
+        ucc_pt_cudaSetDevice(bootstrap->get_local_rank() % dev_count);
+        return;
     }
 
     if (ucc_pt_rocmGetDeviceCount(&dev_count) == 0 && dev_count != 0) {
-	ucc_pt_rocmSetDevice(bootstrap->get_local_rank() % dev_count);
+        ucc_pt_rocmSetDevice(bootstrap->get_local_rank() % dev_count);
     }
 
     return;
@@ -68,12 +69,39 @@ ucc_ee_h ucc_pt_comm::get_ee()
                 throw std::runtime_error(ucc_status_string(status));
             }
         } else {
-            std::cerr << "execution engine is not supported for given memory type";
+            std::cerr << "execution engine is not supported for given memory type"
+                      << std::endl;
             throw std::runtime_error("not supported");
         }
     }
 
     return ee;
+}
+
+ucc_ee_executor_t* ucc_pt_comm::get_executor()
+{
+    ucc_ee_executor_params_t executor_params;
+    ucc_status_t             status;
+
+    if (!executor) {
+        executor_params.mask = UCC_EE_EXECUTOR_PARAM_FIELD_TYPE;
+        if (cfg.mt ==  UCC_MEMORY_TYPE_HOST) {
+            executor_params.ee_type = UCC_EE_CPU_THREAD;
+        } else if (cfg.mt == UCC_MEMORY_TYPE_CUDA) {
+            executor_params.ee_type = UCC_EE_CUDA_STREAM;
+        } else if (cfg.mt == UCC_MEMORY_TYPE_ROCM) {
+            executor_params.ee_type = UCC_EE_ROCM_STREAM;
+        } else {
+            std::cerr << "executor is not supported for given memory type"
+                      << std::endl;
+            throw std::runtime_error("not supported");
+        }
+        status = ucc_ee_executor_init(&executor_params, &executor);
+        if (status != UCC_OK) {
+            throw std::runtime_error("failed to init executor");
+        }
+    }
+    return executor;
 }
 
 ucc_team_h ucc_pt_comm::get_team()
@@ -96,7 +124,10 @@ ucc_status_t ucc_pt_comm::init()
     ucc_status_t st;
     std::string cfg_mod;
 
-    ee = nullptr;
+    ee       = nullptr;
+    executor = nullptr;
+    stream   = nullptr;
+
     if (cfg.mt != UCC_MEMORY_TYPE_HOST) {
         set_gpu_device();
     }
@@ -108,7 +139,7 @@ ucc_status_t ucc_pt_comm::init()
     UCCCHECK_GOTO(ucc_init(&lib_params, lib_config, &lib), free_lib_config, st);
 
     if (UCC_OK != ucc_mc_available(cfg.mt)) {
-        std::cerr << "Selected memory type " << ucc_mem_type_str(cfg.mt) <<
+        std::cerr << "selected memory type " << ucc_mem_type_str(cfg.mt) <<
             " is not available" << std::endl;
         return UCC_ERR_INVALID_PARAM;
     }
@@ -168,8 +199,17 @@ ucc_status_t ucc_pt_comm::finalize()
         if (cfg.mt == UCC_MEMORY_TYPE_CUDA) {
             ucc_pt_cudaStreamDestroy((cudaStream_t)stream);
         } else {
-            std::cerr << "execution engine is not supported for given memory type";
+            std::cerr << "execution engine is not supported for given memory type"
+                      << std::endl;
             throw std::runtime_error("not supported");
+        }
+    }
+
+    if (executor) {
+        status = ucc_ee_executor_finalize(executor);
+        if (status != UCC_OK) {
+            std::cerr << "ucc executor finalize error: "
+                      << ucc_status_string(status);
         }
     }
 

@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2022, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2022-2024, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  *
  * See file LICENSE for terms.
  */
@@ -70,7 +70,7 @@ ucc_status_t ucc_cpu_executor_init(const ucc_ee_executor_params_t *params,
 {
     ucc_ee_executor_t *eee = ucc_mpool_get(&ucc_ec_cpu.executors);
 
-    ec_debug(&ucc_ec_cpu.super, "executor init, eee: %p", eee);
+    ec_trace(&ucc_ec_cpu.super, "executor init, eee: %p", eee);
     if (ucc_unlikely(!eee)) {
         ec_error(&ucc_ec_cpu.super, "failed to allocate executor");
         return UCC_ERR_NO_MEMORY;
@@ -113,8 +113,12 @@ ucc_status_t ucc_cpu_executor_task_post(ucc_ee_executor_t *executor,
     eee_task->eee = executor;
     switch (task_args->task_type) {
     case UCC_EE_EXECUTOR_TASK_REDUCE:
-        status = ucc_ec_cpu_reduce((ucc_eee_task_reduce_t *)&task_args->reduce,
-                                   task_args->flags);
+        status = ucc_ec_cpu_reduce((ucc_eee_task_reduce_t *)&task_args->reduce, task_args->reduce.dst,
+                                   (task_args->flags &
+                                        UCC_EEE_TASK_FLAG_REDUCE_SRCS_EXT) ?
+                                        task_args->reduce.srcs_ext :
+                                        task_args->reduce.srcs,
+                                    task_args->flags);
         if (ucc_unlikely(UCC_OK != status)) {
             goto free_task;
         }
@@ -147,7 +151,7 @@ ucc_status_t ucc_cpu_executor_task_post(ucc_ee_executor_t *executor,
         tr.dst    = trs->dst;
         tr.alpha  = trs->alpha;
 
-        status = ucc_ec_cpu_reduce(&tr, flags);
+        status = ucc_ec_cpu_reduce(&tr, tr.dst, srcs, flags);
         if (ucc_unlikely(UCC_OK != status)) {
             goto free_task;
         }
@@ -183,7 +187,7 @@ ucc_status_t ucc_cpu_executor_task_finalize(ucc_ee_executor_task_t *task)
 
 ucc_status_t ucc_cpu_executor_finalize(ucc_ee_executor_t *executor)
 {
-    ec_debug(&ucc_ec_cpu.super, "executor finalize, eee: %p", executor);
+    ec_trace(&ucc_ec_cpu.super, "executor finalize, eee: %p", executor);
     ucc_mpool_put(executor);
 
     return UCC_OK;
@@ -203,9 +207,6 @@ ucc_ec_cpu_t ucc_ec_cpu = {
             .table  = ucc_ec_cpu_config_table,
             .size   = sizeof(ucc_ec_cpu_config_t),
         },
-    .super.ops.task_post              = NULL,
-    .super.ops.task_query             = NULL,
-    .super.ops.task_end               = NULL,
     .super.ops.create_event           = NULL,
     .super.ops.destroy_event          = NULL,
     .super.ops.event_post             = NULL,

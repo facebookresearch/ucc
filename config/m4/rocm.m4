@@ -1,8 +1,19 @@
 #
-# Copyright (C) Advanced Micro Devices, Inc. 2016 - 2022. ALL RIGHTS RESERVED.
+# Copyright (C) Advanced Micro Devices, Inc. 2016 - 2023. ALL RIGHTS RESERVED.
 # Copyright (c) 2001-2022, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # See file LICENSE for terms.
 #
+
+ROCM_ARCH_NATIVE="--offload-arch=native"
+ROCM_ARCH908="--offload-arch=gfx908"
+ROCM_ARCH90A="--offload-arch=gfx90a"
+ROCM_ARCH94="--offload-arch=gfx940 \
+--offload-arch=gfx941 \
+--offload-arch=gfx942"
+ROCM_ARCH10="--offload-arch=gfx1030"
+ROCM_ARCH11="--offload-arch=gfx1100 \
+--offload-arch=gfx1101 \
+--offload-arch=gfx1102"
 
 # ROCM_PARSE_FLAGS(ARG, VAR_LIBS, VAR_LDFLAGS, VAR_CPPFLAGS)
 # ----------------------------------------------------------
@@ -39,10 +50,27 @@ AC_DEFUN([ROCM_BUILD_FLAGS],
 # Parse value of ARG into appropriate LIBS, LDFLAGS, and
 # CPPFLAGS variables.
 AC_DEFUN([HIP_BUILD_FLAGS],
-    $4="-D__HIP_PLATFORM_AMD__ -I$1/include/hip -I$1/include"
-    $3="-L$1/lib"
+    $4="-D__HIP_PLATFORM_AMD__ -I$1/include/hip -I$1/include -I$1/llvm/include"
+    $3="-L$1/lib -L$1/llvm/lib"
     $2="-lamdhip64"
 )
+
+# CHECK_ROCM_VERSION(HIP_VERSION_MAJOR, ROCM_VERSION_CONDITION)
+# ----------------------------------------------------------
+# Checks ROCm version and marks condition as 1 (TRUE) or 0 (FALSE)
+AC_DEFUN([CHECK_ROCM_VERSION], [
+AC_COMPILE_IFELSE(
+[AC_LANG_PROGRAM([[#include <${with_rocm}/include/hip/hip_version.h>
+    ]], [[
+#if HIP_VERSION_MAJOR >= $1
+return 0;
+#else
+intr make+compilation_fail()
+#endif
+    ]])],
+    [$2=1],
+    [$2=0])
+])
 
 #
 # Check for ROCm  support
@@ -56,7 +84,12 @@ AC_ARG_WITH([rocm],
         [Enable the use of ROCm (default is autodetect).])],
     [],
     [with_rocm=guess])
-
+AC_ARG_WITH([rocm-arch],
+    [AS_HELP_STRING([--with-rocm-arch=arch-code],
+        [Defines target GPU architecture,
+            see rocm documentation for valid --offload-arch options for details
+            'all-arch-no-native' for all default architectures but not native])],
+        [], [with_rocm_arch=all])
 rocm_happy=no
 hip_happy=no
 AS_IF([test "x$with_rocm" != "xno"],
@@ -98,32 +131,40 @@ AS_IF([test "x$with_rocm" != "xno"],
            AC_SUBST([ROCM_ROOT])],
           [AC_MSG_WARN([ROCm not found])])
 
+
+    # Check whether we run on ROCm 6.0 or higher
+    CHECK_ROCM_VERSION(6, ROCM_VERSION_60_OR_GREATER)
+    AC_MSG_CHECKING([if ROCm version is 6.0 or above])
+
+    AS_IF([test "x$rocm_happy" = "xyes"],
+        [AS_IF([test "x$with_rocm_arch" = "xall"],
+          [ROCM_ARCH="${ROCM_ARCH908} ${ROCM_ARCH90A} ${ROCM_ARCH94} ${ROCM_ARCH10} ${ROCM_ARCH11} ${ROCM_ARCH_NATIVE}"],
+        [AS_IF([test "x$with_rocm_arch" = "xall-arch-no-native"],
+          [ROCM_ARCH="${ROCM_ARCH908} ${ROCM_ARCH90A} ${ROCM_ARCH94} ${ROCM_ARCH10} ${ROCM_ARCH11}"],
+        [ROCM_ARCH="$with_rocm_arch"])])
+        AS_IF([test "$ROCM_VERSION_60_OR_GREATER" = "1"],
+          AC_SUBST([ROCM_ARCH], ["$ROCM_ARCH"]),
+          AC_SUBST([ROCM_ARCH], [""]))])
     CPPFLAGS="$SAVE_CPPFLAGS"
     LDFLAGS="$SAVE_LDFLAGS"
     LIBS="$SAVE_LIBS"
 
-    #Check whether we run on ROCm 5.0 or higher
-    AC_COMPILE_IFELSE(
-    [AC_LANG_PROGRAM([[#include <${with_rocm}/include/rocm_version.h>
-        ]], [[
-#if ROCM_VERSION_MAJOR >= 5
-int main() {return 0;}
-#else
-intr make+compilation_fail()
-#endif
-        ]])],
-        [ROCM_VERSION_50_OR_GREATER=1],
-        [ROCM_VERSION_50_OR_GREATER=0])
-
-
     HIP_BUILD_FLAGS([$with_rocm], [HIP_LIBS], [HIP_LDFLAGS], [HIP_CPPFLAGS])
-    AC_MSG_CHECKING([if ROCm version is 5.0 or above])
-    if test "$ROCM_VERSION_50_OR_GREATER" = "1" ; then
+
+    if test "$ROCM_VERSION_60_OR_GREATER" = "1" ; then
         AC_MSG_RESULT([yes])
     else
         AC_MSG_RESULT([no])
-        HIP_CPPFLAGS="${HIP_CPPFLAGS} -I${with_rocm}/hip/include"
-        HIP_LDFLAGS="${HIP_LDFLAGS} -L${with_rocm}/hip/lib"
+        # Check whether we run on ROCm 5.0-5.7
+        CHECK_ROCM_VERSION(5, ROCM_VERSION_50_OR_GREATER)
+        AC_MSG_CHECKING([if ROCm version is 5.0 - 5.7])
+        if test "$ROCM_VERSION_50_OR_GREATER" = "1" ; then
+            AC_MSG_RESULT([yes])
+        else
+            AC_MSG_RESULT([no])
+            HIP_CPPFLAGS="${HIP_CPPFLAGS} -I${with_rocm}/hip/include"
+            HIP_LDFLAGS="${HIP_LDFLAGS} -L${with_rocm}/hip/lib"
+        fi
     fi
 
     CPPFLAGS="$HIP_CPPFLAGS $CPPFLAGS"
@@ -142,10 +183,17 @@ intr make+compilation_fail()
     LDFLAGS="$SAVE_LDFLAGS"
     LIBS="$SAVE_LIBS"
 
-
-    AS_IF([test "x$hip_happy" = "xyes"],
-          [AC_PATH_PROG([HIPCC], [hipcc], [notfound], [$PATH:$with_rocm/bin])])
-         AS_IF([test "$HIPCC" = "notfound"], [hip_happy="no"])
+    if test "$ROCM_VERSION_60_OR_GREATER" = "1" ; then
+        AC_MSG_NOTICE([using amdclang as ROCm version is 6.0 or above])
+        AS_IF([test "x$hip_happy" = "xyes"],
+              [AC_PATH_PROG([HIPCC], [amdclang], [notfound], [$PATH:$with_rocm/bin])])
+             AS_IF([test "$HIPCC" = "notfound"], [hip_happy="no"])
+    else
+        AC_MSG_NOTICE([using hipcc as ROCm version is 3.7.0 to ROCm 5.7.1])
+        AS_IF([test "x$hip_happy" = "xyes"],
+              [AC_PATH_PROG([HIPCC], [hipcc], [notfound], [$PATH:$with_rocm/bin])])
+             AS_IF([test "$HIPCC" = "notfound"], [hip_happy="no"])
+    fi
 
     AS_IF([test "x$hip_happy" = "xyes"],
           [AC_DEFINE([HAVE_HIP], 1, [Enable HIP support])

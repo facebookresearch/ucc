@@ -28,13 +28,17 @@ jobs:
     - name: Build UCC
       run: |
         ./autogen.sh
-        CC=clang-${CLANG_VER} CXX=clang++-${CLANG_VER} ./configure --prefix=/tmp/ucc/install --with-ucx=/tmp/ucx/install
+        CC=clang-${CLANG_VER} CXX=clang++-${CLANG_VER} ./configure --prefix=/tmp/ucc/install --with-ucx=/tmp/ucx/install --enable-assert
         bear --cdb /tmp/compile_commands.json make
     - name: Run clang-tidy
       run: |
         echo "Workspace: ${GITHUB_WORKSPACE}"
         cd ${GITHUB_WORKSPACE}
-        run-clang-tidy-${CLANG_VER} -p /tmp/
+        run-clang-tidy-${CLANG_VER} -p /tmp/ 2>&1 | tee /tmp/clang_tidy.log
+        nerrors=$(grep 'error:' /tmp/clang_tidy.log | wc -l)
+        if [ $nerrors -ne 0 ]; then
+            exit 125;
+        fi
         make clean
         rm -rf /tmp/ucc
     - name: Run gtest ASAN

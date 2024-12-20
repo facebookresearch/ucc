@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2021-2022, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2021-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * Copyright (c) Meta Platforms, Inc. and affiliates. 2022.
  *
  * See file LICENSE for terms.
@@ -24,7 +24,6 @@ ucc_tl_self_coll_init_task(ucc_base_coll_args_t *coll_args,
     ucc_coll_task_init(&task->super, coll_args, team);
     UCC_TL_SELF_PROFILE_REQUEST_NEW(task, "tl_self_task", 0);
     task->super.finalize       = ucc_tl_self_coll_finalize;
-    task->super.triggered_post = ucc_triggered_post;
     task->src                  = NULL;
     task->dst                  = NULL;
     task->size                 = 0;
@@ -71,10 +70,11 @@ void ucc_tl_self_copy_progress(ucc_coll_task_t *coll_task)
 
 ucc_status_t ucc_tl_self_copy_start(ucc_coll_task_t *coll_task)
 {
-    ucc_tl_self_task_t *task = ucc_derived_of(coll_task, ucc_tl_self_task_t);
-    ucc_ee_executor_t  *exec;
-    ucc_ee_executor_task_args_t exec_args;
-    ucc_status_t                status;
+    ucc_tl_self_task_t         *task      = ucc_derived_of(coll_task,
+                                                           ucc_tl_self_task_t);
+    ucc_ee_executor_task_args_t exec_args = {0};
+    ucc_ee_executor_t *exec;
+    ucc_status_t       status;
 
     status = ucc_coll_task_get_executor(&task->super, &exec);
     if (ucc_unlikely(status != UCC_OK)) {
@@ -112,6 +112,11 @@ ucc_status_t ucc_tl_self_coll_copy_init(ucc_tl_self_task_t *task)
 {
     ucc_coll_args_t *args = &(task->super.bargs.args);
 
+    if (!ucc_coll_args_is_predefined_dt(args,
+                                        task->super.team->params.rank)) {
+        return UCC_ERR_NOT_SUPPORTED;
+    }
+
     if (UCC_IS_INPLACE(*args)) {
         /* no copy is required for in-place */
         task->super.post     = ucc_tl_self_coll_start;
@@ -133,6 +138,11 @@ ucc_status_t ucc_tl_self_coll_copy_init(ucc_tl_self_task_t *task)
 ucc_status_t ucc_tl_self_alltoallv_init(ucc_tl_self_task_t *task)
 {
     ucc_coll_args_t *args = &(task->super.bargs.args);
+
+    if (!ucc_coll_args_is_predefined_dt(args,
+                                        task->super.team->params.rank)) {
+        return UCC_ERR_NOT_SUPPORTED;
+    }
 
     if (UCC_IS_INPLACE(*args)) {
         /* no copy is required for in-place */
@@ -159,6 +169,11 @@ ucc_status_t ucc_tl_self_alltoallv_init(ucc_tl_self_task_t *task)
 ucc_status_t ucc_tl_self_coll_copyv_init(ucc_tl_self_task_t *task)
 {
     ucc_coll_args_t *args = &(task->super.bargs.args);
+
+    if (!ucc_coll_args_is_predefined_dt(args,
+                                        task->super.team->params.rank)) {
+        return UCC_ERR_NOT_SUPPORTED;
+    }
 
     if (UCC_IS_INPLACE(*args)) {
         /* no copy is required for in-place */
@@ -187,6 +202,11 @@ ucc_status_t ucc_tl_self_coll_copyv_init(ucc_tl_self_task_t *task)
 ucc_status_t ucc_tl_self_scatterv_init(ucc_tl_self_task_t *task)
 {
     ucc_coll_args_t *args = &(task->super.bargs.args);
+
+    if (!ucc_coll_args_is_predefined_dt(args,
+                                        task->super.team->params.rank)) {
+        return UCC_ERR_NOT_SUPPORTED;
+    }
 
     if (UCC_IS_INPLACE(*args)) {
         /* no copy is required for in-place */

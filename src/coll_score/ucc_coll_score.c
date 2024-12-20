@@ -1,12 +1,23 @@
 /**
- * Copyright (c) 2021-2022, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2021-2024, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  *
  * See file LICENSE for terms.
  */
+
 #include "ucc_coll_score.h"
 #include "utils/ucc_string.h"
 #include "utils/ucc_log.h"
 #include "utils/ucc_coll_utils.h"
+
+char *ucc_score_to_str(ucc_score_t score, char *buf, size_t max) {
+    if (score == UCC_SCORE_MAX) {
+        ucc_strncpy_safe(buf, "inf", max);
+    } else {
+        ucc_snprintf_safe(buf, max, "%d", score);
+    }
+
+    return buf;
+}
 
 ucc_status_t ucc_coll_score_alloc(ucc_coll_score_t **score)
 {
@@ -474,44 +485,6 @@ out:
     return status;
 }
 
-static ucc_status_t str_to_mem_type(const char *str, unsigned *mt_n,
-                                    ucc_memory_type_t **mt)
-{
-    ucc_status_t      status = UCC_OK;
-    char **           tokens;
-    unsigned          i, n_tokens;
-    ucc_memory_type_t t;
-    tokens = ucc_str_split(str, ",");
-    if (!tokens) {
-        status = UCC_ERR_INVALID_PARAM;
-        goto out;
-    }
-    n_tokens = ucc_str_split_count(tokens);
-    *mt = ucc_malloc(n_tokens * sizeof(ucc_memory_type_t), "ucc_mem_types");
-    if (!(*mt)) {
-        ucc_error("failed to allocate %zd bytes for ucc_mem_types",
-                  sizeof(ucc_memory_type_t) * n_tokens);
-        status = UCC_ERR_NO_MEMORY;
-        goto out;
-    }
-    *mt_n = 0;
-    for (i = 0; i < n_tokens; i++) {
-        t = ucc_mem_type_from_str(tokens[i]);
-        if (t == UCC_MEMORY_TYPE_LAST) {
-            /* entry does not match any memory type name */
-            ucc_free(*mt);
-            *mt    = NULL;
-            status = UCC_ERR_NOT_FOUND;
-            goto out;
-        }
-        (*mt)[*mt_n] = t;
-        (*mt_n)++;
-    }
-out:
-    ucc_str_split_free(tokens);
-    return status;
-}
-
 static ucc_status_t str_to_score(const char *str, ucc_score_t *score)
 {
     if (0 == strcasecmp("inf", str)) {
@@ -668,24 +641,24 @@ err:
 
 static ucc_status_t ucc_coll_score_parse_str(const char *str,
                                              ucc_coll_score_t *score,
-                                             ucc_rank_t team_size, //NOLINT
+                                             ucc_rank_t team_size,
                                              ucc_base_coll_init_fn_t init,
                                              ucc_base_team_t *team,
                                              ucc_alg_id_to_init_fn_t alg_fn)
 {
     ucc_status_t            status   = UCC_OK;
     ucc_coll_type_t        *ct       = NULL;
-    ucc_memory_type_t      *mt       = NULL;
     size_t                 *msg      = NULL;
     ucc_rank_t             *tsizes   = NULL;
     ucc_base_coll_init_fn_t alg_init = NULL;
     const char*             alg_id   = NULL;
     ucc_score_t             score_v  = UCC_SCORE_INVALID;
     int                     ts_skip  = 0;
+    uint32_t                mtypes   = 0;
     char                  **tokens;
-    unsigned i, n_tokens, ct_n, mt_n, c, m, n_ranges, r, n_tsizes;
+    unsigned i, n_tokens, ct_n, c, m, n_ranges, r, n_tsizes;
 
-    mt_n = ct_n = n_ranges = n_tsizes = 0;
+    ct_n = n_ranges = n_tsizes = 0;
     tokens = ucc_str_split(str, ":");
     if (!tokens) {
         status = UCC_ERR_INVALID_PARAM;
@@ -696,7 +669,8 @@ static ucc_status_t ucc_coll_score_parse_str(const char *str,
         if (!ct && UCC_OK == str_to_coll_type(tokens[i], &ct_n, &ct)) {
             continue;
         }
-        if (!mt && UCC_OK == str_to_mem_type(tokens[i], &mt_n, &mt)) {
+        if (!mtypes && UCC_OK == ucc_str_to_mtype_map(tokens[i], ",",
+                                                      &mtypes)) {
             continue;
         }
         if ((UCC_SCORE_INVALID == score_v) &&
@@ -720,7 +694,7 @@ static ucc_status_t ucc_coll_score_parse_str(const char *str,
     }
     if (tsizes) {
         /* Team size qualifier was provided: check if we should apply this
-           str setting to the  current team */
+           str setting to the current team */
         ts_skip = 1;
         for (i = 0; i < n_tsizes; i++) {
             if (team_size >= tsizes[2 * i] && team_size <= tsizes[2 * i + 1]) {
@@ -732,18 +706,23 @@ static ucc_status_t ucc_coll_score_parse_str(const char *str,
     if (!ts_skip && (UCC_SCORE_INVALID != score_v || NULL != alg_id)) {
         /* Score provided but not coll_types/mem_types.
            This means: apply score to ALL coll_types/mem_types */
-        if (!ct)
+        if (!ct) {
             ct_n = UCC_COLL_TYPE_NUM;
-        if (!mt)
-            mt_n = UCC_MEMORY_TYPE_LAST;
-        if (!msg)
+        }
+        if (!mtypes) {
+            mtypes = UCC_MEM_TYPE_MASK_FULL;
+        }
+        if (!msg) {
             n_ranges = 1;
+        }
         for (c = 0; c < ct_n; c++) {
-            for (m = 0; m < mt_n; m++) {
+            for (m = 0; m < UCC_MEMORY_TYPE_LAST; m++) {
+                if (!(UCC_BIT(m) & mtypes)) {
+                    continue;
+                }
                 ucc_coll_type_t   coll_type = ct ? ct[c] :
                                                    (ucc_coll_type_t)UCC_BIT(c);
-                ucc_memory_type_t mem_type  = mt ? mt[m] :
-                                                   (ucc_memory_type_t)m;
+                ucc_memory_type_t mem_type  = (ucc_memory_type_t)m;
                 if (alg_id) {
                     if (!alg_fn) {
                         status = UCC_ERR_NOT_SUPPORTED;
@@ -798,7 +777,6 @@ static ucc_status_t ucc_coll_score_parse_str(const char *str,
     }
 out:
     ucc_free(ct);
-    ucc_free(mt);
     ucc_free(msg);
     ucc_free(tsizes);
     ucc_str_split_free(tokens);
@@ -984,16 +962,30 @@ out:
     return status;
 }
 
-ucc_status_t ucc_coll_score_update(ucc_coll_score_t *score,
-                                   ucc_coll_score_t *update,
-                                   ucc_score_t       default_score)
+ucc_status_t ucc_coll_score_update(ucc_coll_score_t  *score,
+                                   ucc_coll_score_t  *update,
+                                   ucc_score_t        default_score,
+                                   ucc_memory_type_t *mtypes,
+                                   int                mt_n,
+                                   uint64_t           colls)
 {
     ucc_status_t      status;
     int               i, j;
+    ucc_memory_type_t mt;
+
+    if (mt_n == 0) {
+        mt_n = UCC_MEMORY_TYPE_LAST;
+    }
+
     for (i = 0; i < UCC_COLL_TYPE_NUM; i++) {
-        for (j = 0; j < UCC_MEMORY_TYPE_LAST; j++) {
+        if (!(colls & UCS_BIT(i))) {
+            continue;
+        }
+        for (j = 0; j < mt_n; j++) {
+            mt = (mtypes == NULL) ? (ucc_memory_type_t)j : mtypes[j];
             status = ucc_coll_score_update_one(
-                &score->scores[i][j], &update->scores[i][j], default_score);
+                &score->scores[i][mt],
+                &update->scores[i][mt], default_score);
             if (UCC_OK != status) {
                 return status;
             }
@@ -1002,23 +994,28 @@ ucc_status_t ucc_coll_score_update(ucc_coll_score_t *score,
     return UCC_OK;
 }
 
-ucc_status_t ucc_coll_score_update_from_str(const char *            str,
-                                            ucc_coll_score_t       *score,
-                                            ucc_rank_t              team_size,
-                                            ucc_base_coll_init_fn_t init,
-                                            ucc_base_team_t        *team,
-                                            ucc_score_t             def_score,
-                                            ucc_alg_id_to_init_fn_t alg_fn)
+ucc_status_t
+ucc_coll_score_update_from_str(const char *str,
+                               const ucc_coll_score_team_info_t *info,
+                               ucc_base_team_t *team,
+                               ucc_coll_score_t *score)
 {
     ucc_status_t      status;
     ucc_coll_score_t *score_str;
-    status = ucc_coll_score_alloc_from_str(str, &score_str, team_size, init,
-                                           team, alg_fn);
+
+    status = ucc_coll_score_alloc_from_str(str, &score_str, info->size,
+                                           info->init, team, info->alg_fn);
     if (UCC_OK != status) {
         return status;
     }
-    status = ucc_coll_score_update(score, score_str, def_score);
+
+    status = ucc_coll_score_update(score, score_str,
+                                   info->default_score,
+                                   info->supported_mem_types,
+                                   info->num_mem_types,
+                                   info->supported_colls);
     ucc_coll_score_free(score_str);
+
     return status;
 }
 

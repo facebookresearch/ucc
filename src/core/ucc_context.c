@@ -1,5 +1,6 @@
 /**
- * Copyright (c) 2020-2021, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2020-2024, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *
  * See file LICENSE for terms.
  */
 
@@ -44,6 +45,11 @@ static ucc_config_field_t ucc_context_config_table[] = {
      "is configured with OOB (global mode). 0 - disable, 1 - try, 2 - force.",
      ucc_offsetof(ucc_context_config_t, internal_oob), UCC_CONFIG_TYPE_UINT},
 
+    {"THROTTLE_PROGRESS", "1000",
+     "Throttle UCC progress to every <n>th invocation",
+     ucc_offsetof(ucc_context_config_t, throttle_progress),
+     UCC_CONFIG_TYPE_UINT},
+
     {NULL}};
 UCC_CONFIG_REGISTER_TABLE(ucc_context_config_table, "UCC context", NULL,
                           ucc_context_config_t, &ucc_config_global_list);
@@ -69,8 +75,9 @@ ucc_status_t ucc_context_config_read(ucc_lib_info_t *lib, const char *filename,
         return UCC_ERR_NO_MEMORY;
     }
 
-    status = ucc_config_parser_fill_opts(config, ucc_context_config_table,
-                                         lib->full_prefix, NULL, 0);
+    status = ucc_config_parser_fill_opts(config,
+                                         UCC_CONFIG_GET_TABLE(ucc_context_config_table),
+                                         lib->full_prefix, 0);
     if (status != UCC_OK) {
         ucc_error("failed to read UCC core context config");
         goto err_config;
@@ -220,8 +227,8 @@ ucc_status_t ucc_context_config_modify(ucc_context_config_t *config,
             if (0 == strncmp(tokens[i], "cl/", 3)) {
                 cl_cfg = find_cl_context_config(config, component);
                 if (!cl_cfg) {
-                    ucc_error("required CL %s is not part of the context",
-                              component);
+                    ucc_info("required CL %s is not part of the context",
+                             component);
                     status = UCC_ERR_NOT_FOUND;
                     goto err;
                 }
@@ -236,8 +243,8 @@ ucc_status_t ucc_context_config_modify(ucc_context_config_t *config,
             } else if (0 == strncmp(tokens[i], "tl/", 3)) {
                 tl_cfg = find_tl_context_config(config, component);
                 if (!tl_cfg) {
-                    ucc_error("required TL %s is not part of the context",
-                              component);
+                    ucc_info("required TL %s is not part of the context",
+                             component);
                     status = UCC_ERR_NOT_FOUND;
                     goto err;
                 }
@@ -379,15 +386,18 @@ static ucc_status_t ucc_create_tl_contexts(ucc_context_t *ctx,
         tl_lib = ctx_config->tl_cfgs[i]->tl_lib;
         status = tl_lib->iface->lib.get_attr(&tl_lib->super, &attr);
         if (UCC_OK != status) {
-            ucc_error("failed to query tl lib %s attr", tl_lib->iface->super.name);
+            ucc_error("failed to query tl lib %s attr",
+                       tl_lib->iface->super.name);
             return status;
         }
         if ((attr.flags & UCC_BASE_LIB_FLAG_CTX_SERVICE_TEAM_REQUIRED) &&
             (!ctx_service_team)) {
-            ucc_debug("can not create tl/%s context because context service team "
-                      "is not available for it", tl_lib->iface->super.name);
+            ucc_debug("can not create tl/%s context because context service "
+                      "team is not available for it",
+                      tl_lib->iface->super.name);
             continue;
         }
+        // coverity[overrun-buffer-val:FALSE]
         status = tl_lib->iface->context.create(
             &b_params, &ctx_config->tl_cfgs[i]->super.super, &b_ctx);
         if (UCC_OK != status) {
@@ -437,20 +447,15 @@ err:
     return status;
 }
 
-ucc_status_t ucc_core_addr_exchange(ucc_context_t          *context,
-                                    ucc_context_oob_coll_t *c_oob,
-                                    ucc_team_oob_coll_t    *t_oob,
-                                    ucc_addr_storage_t     *addr_storage)
+ucc_status_t ucc_core_addr_exchange(ucc_context_t *context, ucc_oob_coll_t *oob,
+                                    ucc_addr_storage_t *addr_storage)
 {
-    ucc_team_oob_coll_t *oob;
-    ucc_context_attr_t   attr;
-    ucc_status_t         status;
-    int                  i;
-    size_t *             addr_lens;
-    size_t               max_addrlen;
+    size_t             *addr_lens;
+    ucc_context_attr_t  attr;
+    ucc_status_t        status;
+    ucc_rank_t          i;
+    size_t              max_addrlen;
 
-    ucc_assert(c_oob || t_oob);
-    oob = c_oob ? (ucc_team_oob_coll_t *)c_oob : t_oob;
 poll:
     if (addr_storage->oob_req) {
         status = oob->req_test(addr_storage->oob_req);
@@ -468,7 +473,7 @@ poll:
         if (NULL == addr_storage->storage) {
             addr_storage->size = oob->n_oob_eps;
             attr.mask          = UCC_CONTEXT_ATTR_FIELD_CTX_ADDR_LEN |
-                        UCC_CONTEXT_ATTR_FIELD_CTX_ADDR;
+                                 UCC_CONTEXT_ATTR_FIELD_CTX_ADDR;
             status = ucc_context_get_attr(context, &attr);
             if (UCC_OK != status) {
                 ucc_error("failed to query ctx address");
@@ -493,7 +498,7 @@ poll:
             goto poll;
         }
         addr_lens = (size_t *)addr_storage->storage;
-        ucc_assert(addr_storage->storage);
+        ucc_assert(addr_storage->storage != NULL);
         for (i = 0; i < addr_storage->size; i++) {
             if (addr_lens[i] > addr_storage->addr_len) {
                 addr_storage->addr_len = addr_lens[i];
@@ -531,8 +536,11 @@ poll:
     {
         /* Compute storage rank and check proc info uniqeness */
         ucc_rank_t r = UCC_RANK_MAX;
-        ucc_context_addr_header_t *h;
+        int j;
+        ucc_context_addr_header_t *h, *h0;
 
+        addr_storage->flags = UCC_ADDR_STORAGE_FLAG_TLS_SYMMETRIC;
+        h0 = UCC_ADDR_STORAGE_RANK_HEADER(addr_storage, 0);
         for (i = 0; i < addr_storage->size; i++) {
             h = UCC_ADDR_STORAGE_RANK_HEADER(addr_storage, i);
             if (UCC_CTX_ID_EQUAL(context->id, h->ctx_id)) {
@@ -542,7 +550,18 @@ poll:
                     ucc_error("proc info collision: %d %d", r, i);
                     return UCC_ERR_NO_MESSAGE;
                 }
-                r = (ucc_rank_t)i;
+                r = i;
+            }
+            if (h->n_components == h0->n_components) {
+                /*check if TLs array is the same*/
+                for (j = 0; j < h->n_components; j++) {
+                    if (h->components[j].id != h0->components[j].id) {
+                        addr_storage->flags = 0;
+                        break;
+                    }
+                }
+            } else {
+                addr_storage->flags = 0;
             }
         }
         addr_storage->rank = r;
@@ -551,12 +570,35 @@ poll:
     return UCC_OK;
 }
 
-ucc_status_t ucc_context_create(ucc_lib_h lib,
-                                const ucc_context_params_t *params,
-                                const ucc_context_config_h  config,
-                                ucc_context_h *context)
+static void remove_tl_ctx_from_array(ucc_tl_context_t **array, unsigned *size,
+                                     ucc_tl_context_t *tl_ctx)
 {
-    uint32_t                   topo_required = 0;
+    int i;
+
+    for (i = 0; i < (*size); i++) {
+        if (array[i] == tl_ctx) {
+            break;
+        }
+    }
+    if (i == (*size)) {
+        /* given tl_ctx is not part of array */
+        return;
+    }
+    /* decrement array size and do cyclic shift */
+    (*size)--;
+    for (; i < (*size); i++) {
+        array[i] = array[i + 1];
+    }
+}
+
+ucc_status_t ucc_context_create_proc_info(ucc_lib_h                   lib,
+                                          const ucc_context_params_t *params,
+                                          const ucc_context_config_h  config,
+                                          ucc_context_h              *context,
+                                          ucc_proc_info_t            *proc_info)
+{
+    uint32_t                   topo_required       = 0;
+    uint64_t                   created_ctx_counter = 0;
     ucc_base_context_params_t  b_params;
     ucc_base_context_t        *b_ctx;
     ucc_base_ctx_attr_t        c_attr;
@@ -566,7 +608,7 @@ ucc_status_t ucc_context_create(ucc_lib_h lib,
     ucc_tl_lib_t              *tl_lib;
     ucc_context_t             *ctx;
     ucc_status_t               status;
-    uint64_t                   i;
+    uint64_t                   i, j, n_tl_ctx;
     int                        num_cls;
 
     num_cls = config->n_cl_cfg;
@@ -577,9 +619,10 @@ ucc_status_t ucc_context_create(ucc_lib_h lib,
         status = UCC_ERR_NO_MEMORY;
         goto error;
     }
-    ctx->rank          = UCC_RANK_MAX;
-    ctx->lib           = lib;
-    ctx->ids.pool_size = config->team_ids_pool_size;
+    ctx->throttle_progress = config->throttle_progress;
+    ctx->rank              = UCC_RANK_MAX;
+    ctx->lib               = lib;
+    ctx->ids.pool_size     = config->team_ids_pool_size;
     ucc_list_head_init(&ctx->progress_list);
     ucc_copy_context_params(&ctx->params, params);
     ucc_copy_context_params(&b_params.params, params);
@@ -610,6 +653,7 @@ ucc_status_t ucc_context_create(ucc_lib_h lib,
     ctx->cl_flags = 0;
     for (i = 0; i < num_cls; i++) {
         cl_lib = config->cl_cfgs[i]->cl_lib;
+        // coverity[overrun-buffer-val:FALSE]
         status = cl_lib->iface->context.create(
             &b_params, &config->cl_cfgs[i]->super.super, &b_ctx);
         if (UCC_OK != status) {
@@ -669,14 +713,14 @@ ucc_status_t ucc_context_create(ucc_lib_h lib,
         ucc_error("failed to init progress queue for context %p", ctx);
         goto error_ctx_create;
     }
-    ctx->id.pi      = ucc_local_proc;
+    ctx->id.pi      = *proc_info;
     ctx->id.seq_num = ucc_atomic_fadd32(&ucc_context_seq_num, 1);
     if (params->mask & UCC_CONTEXT_PARAM_FIELD_OOB &&
         params->oob.n_oob_eps > 1) {
         do {
             /* UCC context create is blocking fn, so we can wait here for the
                completion of addr exchange */
-            status = ucc_core_addr_exchange(ctx, &ctx->params.oob, NULL,
+            status = ucc_core_addr_exchange(ctx, &ctx->params.oob,
                                             &ctx->addr_storage);
             if (status < 0) {
                 ucc_error("failed to exchange addresses during context creation");
@@ -711,6 +755,8 @@ ucc_status_t ucc_context_create(ucc_lib_h lib,
                 ucc_debug("TL UCP context is not available, "
                           "service team can not be created");
             } else {
+                memset(&t_params.map, 0, sizeof(ucc_ep_map_t));
+                memset(&t_params.params, 0, sizeof(ucc_team_params_t));
                 t_params.params.mask = UCC_TEAM_PARAM_FIELD_EP |
                                        UCC_TEAM_PARAM_FIELD_EP_RANGE |
                                        UCC_TEAM_PARAM_FIELD_OOB;
@@ -724,11 +770,12 @@ ucc_status_t ucc_context_create(ucc_lib_h lib,
                 t_params.rank            = ctx->rank;
                 t_params.size            = ctx->params.oob.n_oob_eps;
                 /* CORE scope id - never overlaps with CL type */
-                t_params.scope    = UCC_CL_LAST + 1;
-                t_params.scope_id = 0;
-                t_params.id       = 0;
-                t_params.team     = NULL;
-                t_params.map.type = UCC_EP_MAP_FULL;
+                t_params.scope      = UCC_CL_LAST + 1;
+                t_params.scope_id   = 0;
+                t_params.id         = 0;
+                t_params.team       = NULL;
+                t_params.map.type   = UCC_EP_MAP_FULL;
+                t_params.map.ep_num = t_params.size;
                 status            = UCC_TL_CTX_IFACE(ctx->service_ctx)
                              ->team.create_post(&ctx->service_ctx->super,
                                                 &t_params, &b_team);
@@ -753,23 +800,52 @@ ucc_status_t ucc_context_create(ucc_lib_h lib,
         }
     }
 
-    for (i = 0; i < ctx->n_tl_ctx; i++) {
+    n_tl_ctx = ctx->n_tl_ctx;
+    for (i = 0; i < n_tl_ctx; i++) {
         tl_ctx = ctx->tl_ctx[i];
         tl_lib = ucc_derived_of(tl_ctx->super.lib, ucc_tl_lib_t);
         if (tl_lib->iface->context.create_epilog) {
             status = tl_lib->iface->context.create_epilog(&tl_ctx->super);
-            if (UCC_OK != status) {
-                ucc_error("ctx create epilog for %s failed: %s",
-                          tl_lib->iface->super.name, ucc_status_string(status));
-                goto error_ctx_create;
+            if (UCC_OK == status) {
+                created_ctx_counter++;
+            } else {
+                if (ucc_tl_is_required(lib, tl_lib->iface, 1)) {
+                    ucc_error("ctx create epilog for %s failed: %s",
+                              tl_lib->iface->super.name, ucc_status_string(status));
+                    goto error_ctx_create_epilog;
+                } else {
+                    ucc_debug("ctx create epilog for %s failed: %s",
+                              tl_lib->iface->super.name, ucc_status_string(status));
+                    tl_lib->iface->context.destroy(&tl_ctx->super);
+                    for (j = 0; j < ctx->n_cl_ctx; j++) {
+                        remove_tl_ctx_from_array(ctx->cl_ctx[j]->tl_ctxs,
+                                                 &ctx->cl_ctx[j]->n_tl_ctxs,
+                                                 tl_ctx);
+                    }
+                    remove_tl_ctx_from_array(ctx->tl_ctx, &ctx->n_tl_ctx,
+                                             tl_ctx);
+                }
             }
+        } else {
+            created_ctx_counter++;
         }
     }
+    if (0 == created_ctx_counter) {
+        ucc_error("no TL context created");
+        status = UCC_ERR_NO_RESOURCE;
+        goto error_ctx_create_epilog;
+    }
 
-    ucc_info("created ucc context %p for lib %s", ctx, lib->full_prefix);
+    ucc_debug("created ucc context %p for lib %s", ctx, lib->full_prefix);
     *context = ctx;
     return UCC_OK;
 
+error_ctx_create_epilog:
+    for (j = 0; j < created_ctx_counter; j++) {
+        tl_ctx = ctx->tl_ctx[j];
+        tl_lib = ucc_derived_of(tl_ctx->super.lib, ucc_tl_lib_t);
+        tl_lib->iface->context.destroy(&tl_ctx->super);
+    }
 error_ctx_create:
     for (i = 0; i < ctx->n_cl_ctx; i++) {
         config->cl_cfgs[i]->cl_lib->iface->context.destroy(
@@ -780,6 +856,15 @@ error_ctx:
     ucc_free(ctx);
 error:
     return status;
+}
+
+ucc_status_t ucc_context_create(ucc_lib_h lib,
+                                const ucc_context_params_t *params,
+                                const ucc_context_config_h  config,
+                                ucc_context_h *context)
+{
+    return ucc_context_create_proc_info(lib, params, config, context,
+                                        &ucc_local_proc);
 }
 
 static ucc_status_t ucc_context_free_attr(ucc_context_attr_t *context_attr)
@@ -824,7 +909,7 @@ ucc_status_t ucc_context_destroy(ucc_context_t *context)
         tl_ctx = context->tl_ctx[i];
         tl_lib = ucc_derived_of(tl_ctx->super.lib, ucc_tl_lib_t);
         if (tl_ctx->ref_count != 0 ) {
-            ucc_warn("tl ctx %s is still in use", tl_lib->iface->super.name);
+            ucc_info("tl ctx %s is still in use", tl_lib->iface->super.name);
         }
         tl_lib->iface->context.destroy(&tl_ctx->super);
     }
@@ -851,7 +936,7 @@ ucc_status_t ucc_context_progress_register(ucc_context_t *ctx,
     ucc_context_progress_entry_t *entry =
         ucc_malloc(sizeof(*entry), "progress_entry");
     if (!entry) {
-        ucc_error("failed to allocate %zd bytes for progress ntry",
+        ucc_error("failed to allocate %zd bytes for progress entry",
                   sizeof(*entry));
         return UCC_ERR_NO_MEMORY;
     }
@@ -878,12 +963,25 @@ ucc_status_t ucc_context_progress_deregister(ucc_context_t *ctx,
 
 ucc_status_t ucc_context_progress(ucc_context_h context)
 {
+    static int                    call_num = 0;
     ucc_status_t                  status;
     ucc_context_progress_entry_t *entry;
-    /* progress registered progress fns */
-    ucc_list_for_each(entry, &context->progress_list, list_elem) {
-        entry->fn(entry->arg);
+    int                           is_empty;
+
+    is_empty = ucc_progress_queue_is_empty(context->pq);
+    if (ucc_likely(is_empty)) {
+        call_num--;
+        if (ucc_likely(call_num >= 0)) {
+            return UCC_OK;
+        }
+        /* progress registered progress fns */
+        ucc_list_for_each(entry, &context->progress_list, list_elem) {
+            entry->fn(entry->arg);
+        }
+        call_num = context->throttle_progress;
+        return UCC_OK;
     }
+
     /* the fn below returns int - number of completed tasks.
        TODO : do we need to handle it ? Maybe return to user
        as int as well? */
@@ -923,15 +1021,13 @@ static ucc_status_t ucc_context_pack_addr(ucc_context_t             *context,
                       cl_lib->super.log_component.name);
             return status;
         }
-        if (attr.attr.ctx_addr_len > 0) {
-            total_len += attr.attr.ctx_addr_len;
-            packed++;
-            if (h) {
-                h->components[last_packed].id     = cl_lib->iface->super.id;
-                h->components[last_packed].offset = offset;
-                last_packed++;
-                offset += attr.attr.ctx_addr_len;
-            }
+        total_len += attr.attr.ctx_addr_len;
+        packed++;
+        if (h) {
+            h->components[last_packed].id     = cl_lib->iface->super.id;
+            h->components[last_packed].offset = offset;
+            last_packed++;
+            offset += attr.attr.ctx_addr_len;
         }
     }
 
@@ -945,21 +1041,20 @@ static ucc_status_t ucc_context_pack_addr(ucc_context_t             *context,
                       tl_lib->super.log_component.name);
             return status;
         }
-        if (attr.attr.ctx_addr_len > 0) {
-            total_len += attr.attr.ctx_addr_len;
-            packed++;
-            if (h) {
-                h->components[last_packed].id     = tl_lib->iface->super.id;
-                h->components[last_packed].offset = offset;
-                last_packed++;
-                offset += attr.attr.ctx_addr_len;
-            }
+        total_len += attr.attr.ctx_addr_len;
+        packed++;
+        if (h) {
+            h->components[last_packed].id     = tl_lib->iface->super.id;
+            h->components[last_packed].offset = offset;
+            last_packed++;
+            offset += attr.attr.ctx_addr_len;
         }
     }
 
     if (addr_len) {
         *addr_len = total_len + UCC_CONTEXT_ADDR_HEADER_SIZE(packed);
     }
+
     if (n_packed) {
         *n_packed = packed;
     }
@@ -982,7 +1077,7 @@ ucc_status_t ucc_context_get_attr(ucc_context_t      *context,
                 ucc_error("failed to calc ucc context address length");
                 return status;
             }
-            context->attr.mask        |= UCC_CONTEXT_ATTR_FIELD_CTX_ADDR_LEN;
+            context->attr.mask |= UCC_CONTEXT_ATTR_FIELD_CTX_ADDR_LEN;
         }
         context_attr->ctx_addr_len = context->attr.ctx_addr_len;
     }
@@ -1015,6 +1110,7 @@ ucc_status_t ucc_context_get_attr(ucc_context_t      *context,
         ucc_base_ctx_attr_t attr;
         ucc_tl_lib_t *      tl_lib;
 
+        memset(&attr.attr, 0, sizeof(ucc_context_attr_t));
         attr.attr.mask = UCC_CONTEXT_ATTR_FIELD_WORK_BUFFER_SIZE;
         attr.attr.global_work_buffer_size = 0;
         for (i = 0; i < context->n_tl_ctx; i++) {

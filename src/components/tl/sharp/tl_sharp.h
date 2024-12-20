@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2021, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2021-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  *
  * See file LICENSE for terms.
  */
@@ -50,6 +50,9 @@ typedef struct ucc_tl_sharp_context_config {
     size_t                   reg_threshold;
     unsigned int             rand_seed;
     unsigned int             uprogress_num_polls;
+    int                      context_per_team;
+    int                      enable_lazy_group_alloc;
+    int                      team_max_ppn;
 } ucc_tl_sharp_context_config_t;
 
 typedef struct ucc_tl_sharp_lib {
@@ -89,9 +92,12 @@ UCC_CLASS_DECLARE(ucc_tl_sharp_context_t, const ucc_base_context_params_t *,
                   const ucc_base_config_t *);
 
 typedef struct ucc_tl_sharp_team {
-    ucc_tl_team_t           super;
-    struct sharp_coll_comm *sharp_comm;
-    ucc_tl_sharp_oob_ctx_t  oob_ctx;
+    ucc_tl_team_t             super;
+    struct sharp_coll_context *sharp_context;
+    ucc_rcache_t              *rcache;
+    struct sharp_coll_comm    *sharp_comm;
+    ucc_tl_sharp_oob_ctx_t    oob_ctx;
+    ucc_topo_t                *topo;
 } ucc_tl_sharp_team_t;
 
 typedef struct ucc_tl_sharp_task {
@@ -103,10 +109,23 @@ typedef struct ucc_tl_sharp_task {
             ucc_tl_sharp_reg_t *r_mem_h;
         } allreduce;
         struct {
+            ucc_tl_sharp_reg_t *s_mem_h;
+            ucc_tl_sharp_reg_t *r_mem_h;
+        } reduce_scatter;
+        struct {
             ucc_tl_sharp_reg_t *mem_h;
         } bcast;
     };
 } ucc_tl_sharp_task_t;
+
+ucc_status_t ucc_tl_sharp_context_init(ucc_tl_sharp_context_t *sharp_ctx,
+                                       struct sharp_coll_context **context,
+                                       ucc_tl_sharp_oob_ctx_t *oob_ctx,
+                                       ucc_topo_t *topo);
+ucc_status_t ucc_tl_sharp_rcache_create(struct sharp_coll_context *contex,
+                                        ucc_rcache_t **rcache);
+
+ucc_status_t sharp_status_to_ucc_status(int status);
 
 #define TASK_TEAM(_task)                                                       \
     (ucc_derived_of((_task)->super.team, ucc_tl_sharp_team_t))
@@ -116,8 +135,15 @@ typedef struct ucc_tl_sharp_task {
     (ucc_derived_of((_task)->super.team->context->lib, ucc_tl_sharp_lib_t))
 #define TASK_ARGS(_task) (_task)->super.bargs.args
 
-#define UCC_TL_SHARP_SUPPORTED_COLLS                                           \
+#define UCC_TL_BASIC_SHARP_SUPPORTED_COLLS                                     \
     (UCC_COLL_TYPE_ALLREDUCE | UCC_COLL_TYPE_BARRIER | UCC_COLL_TYPE_BCAST)
+
+#if HAVE_DECL_SHARP_COLL_DO_REDUCE_SCATTER
+#define UCC_TL_SHARP_SUPPORTED_COLLS                                           \
+    (UCC_TL_BASIC_SHARP_SUPPORTED_COLLS | UCC_COLL_TYPE_REDUCE_SCATTER)
+#else
+#define UCC_TL_SHARP_SUPPORTED_COLLS (UCC_TL_BASIC_SHARP_SUPPORTED_COLLS)
+#endif
 
 UCC_CLASS_DECLARE(ucc_tl_sharp_team_t, ucc_base_context_t *,
                   const ucc_base_team_params_t *);
